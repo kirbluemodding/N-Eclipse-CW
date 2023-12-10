@@ -1,0 +1,20 @@
+---
+#Replaces Actor 555 AC_WATER_BUBBLE_CANNON (Sprite 328)
+
+
+source_files: [../src/boomeranghax.cpp]
+hooks:
+  - name: BoomerangHaxBuild
+    type: add_func_pointer
+    src_addr_pal: 0x8097FE80
+    target_func: 'daBoomerangHax_c::build(void)'
+
+  - name: GABON_ROCK_replace
+    type: add_func_pointer
+    src_addr_pal: 0x8095C740
+    target_func: 'daGabonRock_c::getsettings(void)'
+
+  - name: GDisplay_doWait
+    type: add_func_pointer
+    src_addr_pal: 0x80327A58
+    target_func: 'dGameDisplay_c::doWaitCheck(void)'
