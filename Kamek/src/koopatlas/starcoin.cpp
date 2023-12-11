@@ -469,7 +469,7 @@ void dWMStarCoin_c::executeState_Wait() {
 		if (!enableHardMode) {
 			enableHardMode = true;
 			OSReport("Hard Mode enabled!\n");
-			MapSoundPlayer(SoundRelatedClass, SE_VOC_MA_CS_COURSE_IN_HARD, 1);
+			MapSoundPlayer(SoundRelatedClass, SE_VOC_KO_CS_COURSE_IN_HARD, 1);
 			showSecretMessage(L"Hard Mode", linesOn, lineCountOn);
 		} else {
 			enableHardMode = false;
@@ -529,7 +529,7 @@ void dWMStarCoin_c::executeState_Wait() {
 			enableDebugMode = !enableDebugMode;
 
 			if (enableDebugMode) {
-				MapSoundPlayer(SoundRelatedClass, SE_VOC_MA_GET_PRIZE, 1);
+				MapSoundPlayer(SoundRelatedClass, SE_VOC_KO_GET_PRIZE, 1);
 
 				const int msgCount = 9;
 				static const wchar_t *msg[msgCount] = {

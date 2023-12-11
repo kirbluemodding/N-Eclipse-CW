@@ -18,8 +18,6 @@
 #include "koopatlas/pathmanager.h"
 #include "koopatlas/mapmusic.h"
 
-#include "fileload.h"
-
 #define WM_DEBUGGING
 //#define WM_SPAMMY_DEBUGGING
 
@@ -48,30 +46,6 @@ class dWMShop_c;
 class dWMStarCoin_c;
 class dWorldCamera_c;
 
-
-class dWMBorderData
-{
-private:
-	dDvdLoader_c fileLoader;
-	struct dWMBorderWorld_s
-	{
-		u16 xLeft;
-		u16 xRight;
-		u16 yTop;
-		u16 yBottom;
-	};
-	struct dWMBorderFile_s
-	{
-		u32 header;  //K(oopatlas)M(ap)B(order)B(inary)
-		u8 numOfWorlds;
-		dWMBorderWorld_s world[1];
-	};
-public:
-	dWMBorderFile_s *data;
-	bool load(const char* path);
-};
-
-
 class dScKoopatlas_c : public dScene_c {
 	public:
 		dScKoopatlas_c();
@@ -95,7 +69,6 @@ class dScKoopatlas_c : public dScene_c {
 		DECLARE_STATE(PowerupsWait);
 		DECLARE_STATE(ShopWait);
 		DECLARE_STATE(CoinsWait);
-		DECLARE_STATE(WMViewerWait);
 		DECLARE_STATE(SaveOpen);
 		DECLARE_STATE(SaveSelect);
 		DECLARE_STATE(SaveWindowClose);
@@ -165,19 +138,6 @@ class dScKoopatlas_c : public dScene_c {
 		void showSaveWindow();
 
 		bool keepMusicPlaying;
-		
-		bool WMViewerVisible;
-		struct WMViewerBorder
-		{
-			float *xLeft, *xRight, *yTop, *yBottom;
-		};
-		WMViewerBorder WMBorder;
-		bool sfxShouldPlay;
-		bool sfxIsPlaying;
-		nw4r::snd::SoundHandle scrollHandle;
-
-		dWMBorderData borderData;
-		bool coordinatesSet;
 };
 
 extern void *_8042A788;

@@ -21,7 +21,6 @@ CREATE_STATE_E(dScKoopatlas_c, EasyPairingWait);
 CREATE_STATE_E(dScKoopatlas_c, PowerupsWait);
 CREATE_STATE_E(dScKoopatlas_c, ShopWait);
 CREATE_STATE_E(dScKoopatlas_c, CoinsWait);
-CREATE_STATE_E(dScKoopatlas_c, WMViewerWait);
 CREATE_STATE_E(dScKoopatlas_c, SaveOpen);
 CREATE_STATE_E(dScKoopatlas_c, SaveSelect);
 CREATE_STATE_E(dScKoopatlas_c, SaveWindowClose);
@@ -184,7 +183,7 @@ bool WMInit_LoadResources2(void *ptr) {
 		OSReport("Load map: %s\n", wm->mapPath);
 	}
 
-	if (wm->mapData.load(wm->mapPath) && wm->borderData.load("NewerRes/MapBorders.bin")) {
+	if (wm->mapData.load(wm->mapPath)) {
 		return true;
 	} else
 		return false;
@@ -439,12 +438,6 @@ int dScKoopatlas_c::onCreate() {
 
 	somethingAboutSound(_8042A788);
 
-	sfxIsPlaying = false;
-	sfxShouldPlay = false;
-	WMViewerVisible = false;
-
-	coordinatesSet = false;
-
 	return true;
 }
 
@@ -540,36 +533,6 @@ void dScKoopatlas_c::endState_ContinueWait() {
 
 
 void dScKoopatlas_c::executeState_Normal() {
-
-	if (!coordinatesSet)
-	{
-		SaveBlock *save = GetSaveFile()->GetBlock(-1);
-		int size = 0;
-		size = borderData.data->numOfWorlds;
-		float* left = new float[size];
-		float* right = new float[size];
-		float* top = new float[size];
-		float* bottom = new float[size];
-		for (int i = 0; i < borderData.data->numOfWorlds; i++)
-		{
-			left[i] = borderData.data->world[i].xLeft;
-			right[i] = borderData.data->world[i].xRight;
-			top[i] = -borderData.data->world[i].yTop;
-			bottom[i] = -borderData.data->world[i].yBottom;
-		}
-		WMBorder.xLeft = left;
-		WMBorder.xRight = right;
-		WMBorder.yTop = top;
-		WMBorder.yBottom = bottom;
-
-		delete[] left;
-		delete[] right;
-		delete[] top;
-		delete[] bottom;
-
-		coordinatesSet = true;
-	}
-
 	if (pathManager.completionMessagePending) {
 		OSReport("Going to set CompletionMsg\n");
 		state.setState(&StateID_CompletionMsg);
@@ -578,12 +541,7 @@ void dScKoopatlas_c::executeState_Normal() {
 
 	if (pathManager.doingThings())
 		return;
-	
-	if (scrollHandle.Exists()) {
-		scrollHandle.Stop(0);
-		sfxIsPlaying = false;
-	}
-	
+
 	int nowPressed = Remocon_GetPressed(GetActiveRemocon());
 
 	// Nothing related to the menu is going on
@@ -605,16 +563,7 @@ void dScKoopatlas_c::executeState_Normal() {
 	 		for (int l = 0; l < 6; l++)
 	 			save->SetLevelCondition(w, l, COND_COIN_ALL);
 #endif
-	} else if (nowPressed & WPAD_A) {
-		WMViewerVisible = true;
-		hud->hideAll();
-		MapSoundPlayer(SoundRelatedClass, SE_SYS_MAP_VIEW_MODE, 1);
-		state.setState(&StateID_WMViewerWait);
-	}
-	else if (nowPressed & WPAD_B)
-	{
-		OSReport("Pos X/Y Mario: %02f, %02f\n", player->pos.x, player->pos.y);
-	}
+	} 
 }
 
 void dScKoopatlas_c::executeState_CSMenu() {
@@ -837,45 +786,6 @@ void dScKoopatlas_c::executeState_CoinsWait() {
 	if (!coins->visible) {
 		state.setState(&StateID_Normal);
 		hud->unhideAll();
-	}
-
-}
-
-
-void dScKoopatlas_c::executeState_WMViewerWait() {
-
-	int nowPressed = Remocon_GetPressed(GetActiveRemocon());
-
-	if (nowPressed & WPAD_A) {
-		if (sfxIsPlaying || scrollHandle.Exists()) {
-			scrollHandle.Stop(0);
-			sfxIsPlaying = false;
-		}
-
-		dWorldCamera_c::instance->panToPosition(player->pos.x, player->pos.y, 2.8f, true);
-
-		WMViewerVisible = false;
-
-		MapSoundPlayer(SoundRelatedClass, SE_SYS_MAP_VIEW_QUIT, 1);
-		state.setState(&StateID_Normal);
-		hud->unhideAll();
-	}
-
-	if (sfxShouldPlay)
-	{
-		if (!sfxIsPlaying)
-		{
-			PlaySoundWithFunctionB4(SoundRelatedClass, &scrollHandle, SE_SYS_MAP_VIEW_MOVING, 1);
-			sfxIsPlaying = true;
-		}
-	}
-	else
-	{
-		if (sfxIsPlaying)
-		{
-			scrollHandle.Stop(0);
-			sfxIsPlaying = false;
-		}
 	}
 
 }
@@ -1235,6 +1145,7 @@ void dScKoopatlas_c::executeState_CompletionMsg() {
 		// Used when we assemble a dynamic message
 		wchar_t text[512];
 
+#ifndef FALLING_LEAF
 		if (type >= CMP_MSG_COINS && type <= CMP_MSG_WORLD) {
 			// title
 			int w = pathManager.completionMessageWorldNum;
@@ -1259,6 +1170,7 @@ void dScKoopatlas_c::executeState_CompletionMsg() {
 			text[pos++] = 0;
 			baseText = text;
 		}
+#endif
 
 		yesNoWindow->T_question_00->SetString(baseText);
 		yesNoWindow->T_questionS_00->SetString(baseText);
@@ -1318,13 +1230,3 @@ void NewerMapDrawFunc() {
 	SetCurrentCameraID(0);
 }
 
-bool dWMBorderData::load(const char* path)
-{
-	void* temp = fileLoader.load(path);
-	fileLoader.unload();
-	if (temp) {
-		this->data = (dWMBorderFile_s*)temp;
-		return true;
-	}
-	return false;
-}

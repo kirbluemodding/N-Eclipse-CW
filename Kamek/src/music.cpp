@@ -196,12 +196,18 @@ const char* SFXNameList [] = {
 	"meragon_fire_start",		// 2000
 	"meragon_fire",				// 2001
 	"meragon_wing",				// 2002
+	"tenten_step_l",      // 2003
+	"tenten_step_r",      // 2004
+	"block_round_sway",      // 2005
 	NULL
 };
 
 #define SFX_MERAGON_FIRE_START 2000
 #define SFX_MERAGON_FIRE 2001
 #define SFX_MERAGON_WING 2002
+#define SFX_TENTEN_STEP_L 2003
+#define SFX_TENTEN_STEP_R 2004
+#define SFX_BLOCK_ROUND_SWAY 2005
 
 int currentSFX = -1;
 u32 *currentPtr = 0;

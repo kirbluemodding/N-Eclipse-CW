@@ -581,31 +581,10 @@ void dWMMap_c::doEffects() {
 		effects[6].spawn("Wm_cs_snow_b", 0, &efPos, &efRot, 0);
 	}
 #else
-	if (mapID == 1) {
-		// Fullmap.
-		// Torches
-		static const VEC3 torchPos[6] = {
-			{8402.0f, -5528.0f, 7000.0f}, // Big Tower
-			{8444.0f, -5524.0f, 7000.0f}, // Tower
-			{8358.0f, -5524.0f, 7000.0f}, // Tower
-			{8420.0f, -5534.0f, 7000.0f}, // Tower
-			{8380.0f, -5534.0f, 7000.0f}, // Tower
-			{7804.0f, -5064.0f, 7000.0f}, // Castle
-		};
-		const VEC3 reallyBigScale = {1.6f, 1.6f, 1.6f};
-		const VEC3 bigScale = {1.2f, 1.2f, 1.2f};
-		const VEC3 smallScale = {0.25f, 0.25f, 0.25f};
-		for (int i = 0; i < 6; i++) {
-			const VEC3 *whichScale = &smallScale;
-			if (i == 0)
-				whichScale = &bigScale;
-			else if (i == 5)
-				whichScale = &reallyBigScale;
-			effects[i].spawn("Wm_cs_torch", 0, &torchPos[i], &efRot, whichScale);
-		}
-
+	if (mapID == 0) {
+		// New
 		// Mountain Snow
-		const VEC3 efPos = {6000.0f, -5250.0f, 7000.0f};
+		const VEC3 efPos = {2200.0f, -2000.0f, 7000.0f};
 		effects[6].spawn("Wm_cs_snow_b", 0, &efPos, &efRot, 0);
 	}
 #endif

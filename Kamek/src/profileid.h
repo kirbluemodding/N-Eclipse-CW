@@ -511,6 +511,8 @@ enum
 	TentenWing = 485,
 	Meragon = 486,
 	Goombrat = 487,
+	
+	Num
 };
 
 }
@@ -1281,6 +1283,8 @@ enum
 	TentenWing, //752
 	Meragon, //753
 	Goombrat, //754
+	
+	Num
 };
 
 }

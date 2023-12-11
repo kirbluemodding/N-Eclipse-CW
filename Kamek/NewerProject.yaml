@@ -7,19 +7,10 @@ modules:
   - processed/corseClear.yaml
   - processed/apDebug.yaml
   - processed/hardMode.yaml
-  # new stuff
-  - processed/profile.yaml
-  - processed/midwayFlag.yaml
-  - processed/signboard.yaml
-  - processed/goombrat.yaml
-  - processed/tenten.yaml
-  - processed/muncher.yaml
-  # no more new stuff
 #  - processed/layoutDebug.yaml
   - processed/creditsMgr.yaml
   - processed/endingMgr.yaml
   - processed/chestnut.yaml
-  - processed/flipblock.yaml
   - processed/fileselect.yaml
   - processed/magicplatform.yaml
   - processed/cutScene.yaml
@@ -82,3 +73,11 @@ modules:
 #  - processed/actorlog.yaml
   - processed/exceptionHandler.yaml
   - processed/actors.yaml
+  # new stuff
+  - processed/profile.yaml
+  - processed/midwayFlag.yaml
+  - processed/signboard.yaml
+  - processed/goombrat.yaml
+  - processed/tenten.yaml
+  - processed/muncher.yaml
+  - processed/flipblock.yaml # not a new idea, a new sprite

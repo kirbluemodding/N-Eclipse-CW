@@ -332,2867 +332,6 @@ void APDebugDrawer::drawXlu() {
 }
 
 //
-// processed\../src/profile.cpp
-//
-
-#include <profile.h>
-#include <game.h>
-
-
-/* SPRITES */
-
-SpriteData sprites[SpriteId::Num] = { 0 };
-
-class SpritesSetter
-{
-public:
-    SpritesSetter();
-};
-
-SpritesSetter::SpritesSetter()
-{
-    for (u32 i = 0; i < 483; i++)
-        sprites[i] = originalSprites[i];
-}
-
-static SpritesSetter doSetSprites;
-
-/* PROFILES */
-
-Profile* profiles[ProfileId::Num] = { 0 };
-extern "C" Profile** ObjectProfileList;
-
-class ProfileSetter
-{
-public:
-    ProfileSetter();
-};
-
-ProfileSetter::ProfileSetter()
-{
-    ObjectProfileList = &profiles[0];
-
-    for (u32 i = 0; i < ORIGINAL_PROFILES; i++) {
-        profiles[i] = originalProfiles[i];
-    }
-}
-
-static ProfileSetter doSetProfiles;
-
-void SetObjectProfileList()
-{
-    ObjectProfileList = &profiles[0];
-}
-
-/* SPRITE FILES */
-
-extern "C" const char** spriteFiles[483];
-const char** customSpriteFiles[SpriteId::Num - 483] = { 0 };
-
-/* PROFILE NAMES*/
-
-extern "C" const char* profileNames[ORIGINAL_PROFILES];
-const char* customProfileNames[ProfileId::Num - ORIGINAL_PROFILES] = { 0 };
-
-const char* GetProfileName(u32 profileId)
-{
-    if (profileId < ORIGINAL_PROFILES) {
-        return profileNames[profileId];
-    }
-
-    return customProfileNames[profileId - ORIGINAL_PROFILES];
-}
-
-/* CUSTOM PROFILE CTOR */
-
-Profile::Profile(dActor_c* (*buildFunc)(), u32 id, const SpriteData* spriteData, u16 executeOrderProfileId, u16 drawOrderProfileId, const char* name, const char** files, u32 flags) {
-    this->buildFunc = buildFunc;
-    this->executeOrderProfileId = executeOrderProfileId;
-    this->drawOrderProfileId = drawOrderProfileId;
-	this->flags = flags;
-
-	u32 profileId;
-	if (spriteData) {
-		sprites[id] = *spriteData;
-		if (id < 483) {
-			spriteFiles[id] = files;
-		} else {
-			customSpriteFiles[id - 483] = files;
-		}
-		profileId = spriteData->profileId;
-	}
-	else {
-		profileId = id;
-	}
-	
-	profiles[profileId] = this;
-	if (profileId < ORIGINAL_PROFILES) {
-		profileNames[profileId] = name;
-	}
-	else {
-		customProfileNames[profileId - ORIGINAL_PROFILES] = name;
-	}
-}
-
-//
-// processed\../src/midwayFlag.cpp
-//
-
-#include <common.h>
-#include <game.h>
-#include <dCourse.h>
-#include <g3dhax.h>
-#include <sfx.h>
-#include <stage.h>
-#include "midwayFlag.h"
-
-extern "C" bool midwayFlagOnCreate(daChukanPoint_c* self); // 0x807e2130
-extern "C" int midwayFlagOnExecute(daChukanPoint_c* self); // 0x807e24c0
-// extern "C" void stuffRelatingToCollisions(daChukanPoint_c* self, float, float, float); // 0x800957B0
-extern "C" void doSpriteMovement(daChukanPoint_c* self); // 0x800955F0
-extern "C" unsigned char checkWater(float x, float y, u8 layer, float *water_height); // 0x80075274 | 0 = None, 1 = Water, 2 = ???, 3 = Lava, 4 = Poison
-
-extern "C" void midwayFlagPowerUp(daChukanPoint_c* self, dAcPy_c* player); // 0x0x807e2ca0
-
-
-void midwayFlagCollisionCallback(ActivePhysics *one, ActivePhysics *two) {
-	// OSReport("Collision callback called! %s %s\n", one->owner->name_string, two->owner->name_string);
-	daChukanPoint_c* self = (daChukanPoint_c*)one->owner;
-	dStageActor_c* other = (dStageActor_c*)two->owner;
-
-	switch (other->name) {
-		case EN_JUMPDAI:
-			if (!self->enableGravity) break;
-
-			u8* jumpdaiTimer = (u8*)((u32)(other) + 0x632);
-
-			if(*jumpdaiTimer == 0 && self->speed.y < 0.0f) {
-				*jumpdaiTimer = 0x11;
-				PlaySound(self, SE_PLY_JUMPDAI);
-			}
-			else if(*jumpdaiTimer == 8) {
-				if (!self->isInLiquid()) self->speed.y = 6.0f;
-				else self->speed.y = 5.0f;
-			}
-			break;
-	}
-
-	self->activePhysicsCallback(one, two);
-}
-
-
-bool midwayFlagNewOnCreate(daChukanPoint_c* self) {
-    int color = self->settings >> 24 & 0xF; // Nibble 6
-
-	int entranceID = self->settings >> 16 & 0xFF; // Nibble 7-8
-
-	int nybble5 = self->settings >> 28 & 0xF; // Nibble 5
-	bool loadFacingLeft = nybble5 & 0b1000;
-	bool secondCheckpoint = nybble5 & 0b100;
-	self->enableGravity = nybble5 & 0b10;
-	self->disablePowerUp = nybble5 & 0b1;
-
-	int rotation = self->settings & 0xFFFF;
-
-    self->settings = color << 24 | entranceID << 16 | loadFacingLeft << 4 | secondCheckpoint; // Needed more bits so I need to do this
-
-    bool ret = midwayFlagOnCreate(self);
-	self->activePhysicsCallback = self->aPhysics.info.callback;
-	self->aPhysics.info.callback = midwayFlagCollisionCallback;
-	self->aPhysics.info.category1 = 0x3;
-	self->aPhysics.info.category2 = 0x0;
-	self->aPhysics.info.bitfield1 = 0x4F;
-	// self->aPhysics.info.bitfield2 = 0xffbafffe;
-	self->aPhysics.info.unkShort1C = 0;
-
-
-	// Rotation stuff
-
-	// rotation / 0xF * 0xFFFF == rotation * 0x1111
-	// BUT 0x1111 doesn't work with some high values for some reason so I'm using 0xFFF
-	self->rot.x = (float)(rotation); // X is vertical axis (0xFFF ~= 22.5 degrees)
-	self->rot.y = 0xBFF4; // Y is horizontal axis
-	self->rot.z = 0; // Z is ... an axis >.>
-	self->direction = 1; // Heading left.
-
-	// Can't rotate active physics sadly :(
-	
-	self->max_speed.x = 0;
-	self->speed.x = 0;
-    self->liquid = 0;
-
-	if (self->enableGravity) {
-		self->max_speed.y = -4.0;
-		self->speed.y = -4.0;
-		self->y_speed_inc = -0.1875;
-	} else {
-		self->max_speed.y = 0.0;
-		self->speed.y = 0.0;
-		self->y_speed_inc = 0.0;
-	}
-
-	self->acState.setState(&daChukanPoint_c::StateID_Wait);
-
-	Vec2 rotationBalance;
-	float angle = ((rotation / (float)(0xFFFF)) * 360.0) - 90.0;
-	if (angle < 0.0) angle += 360.0;
-	rotationBalance.x = cos(angle * M_PI / 180.0);
-	rotationBalance.y = sin(angle * M_PI / 180.0);
-
-	self->pos.y += 8.0;
-
-
-	// Physics stuff
-
-	Vec2 aPhysicsCenter = (Vec2){0.0, 0.0};
-	aPhysicsCenter.x = -24.0 * rotationBalance.x;
-	aPhysicsCenter.y = -24.0 * rotationBalance.y;
-
-	Vec2 aPhysicsEdge = (Vec2){0.0, 0.0};
-	aPhysicsEdge.x = 4.0 + abs(20.0 * rotationBalance.x);
-	aPhysicsEdge.y = 4.0 + abs(20.0 * rotationBalance.y);
-
-	self->aPhysics.info.xDistToCenter = (float)aPhysicsCenter.x;
-	self->aPhysics.info.yDistToCenter = (float)aPhysicsCenter.y;
-	self->aPhysics.info.xDistToEdge = (float)aPhysicsEdge.x;
-	self->aPhysics.info.yDistToEdge = (float)aPhysicsEdge.y;
-
-
-	// Tile collider
-
-	// These fucking rects do something for the tile rect
-	// spriteSomeRectX = 28.0f;
-	// spriteSomeRectY = 32.0f;
-	self->_320 = 0.0f;
-	self->_324 = 16.0f;
-
-	static const pointSensor_s below(0<<12, 0<<12);
-	static const pointSensor_s above(0<<12, 12<<12);
-	static const lineSensor_s adjacent(6<<12, 9<<12, 8<<12);
-
-	self->collMgr.init(self, &below, &above, &adjacent);
-	self->collMgr.calculateBelowCollisionWithSmokeEffect();
-
-	bool cmgr_returnValue = self->collMgr.isOnTopOfTile();
-
-	if (self->collMgr.isOnTopOfTile())
-		self->isBouncing = false;
-	else
-		self->isBouncing = true;
-
-    return ret;
-}
-
-
-bool calculateTileCollisions(daChukanPoint_c* self) {
-	// Returns true if sprite should turn, false if not.
-
-	self->HandleXSpeed();
-	self->HandleYSpeed();
-	doSpriteMovement(self);
-
-
-	bool cmgr_returnValue = self->collMgr.isOnTopOfTile();
-	// OSReport(self->collMgr.sCollBelow.)
-	self->collMgr.calculateBelowCollisionWithSmokeEffect();
-
-	if (self->isBouncing) {
-		// stuffRelatingToCollisions(self, 0.1875f, 1.0f, 0.5f);
-		if (self->speed.y != 0.0f)
-			self->isBouncing = false;
-	}
-
-	if (self->collMgr.isOnTopOfTile()) {
-		// Walking into a tile branch
-
-		if (cmgr_returnValue == 0)
-			self->isBouncing = true;
-			// OSReport("0x%x\n", self->collMgr.calculateBelowCollisionWithSmokeEffect());
-
-		if (self->speed.x != 0.0f) {
-			//playWmEnIronEffect();
-		}
-
-		self->speed.y = 0.0f;
-	} else {
-		self->x_speed_inc = 0.0f;
-	}
-
-	// Bouncing checks
-	if (self->_34A & 4) {
-		Vec v = (Vec){0.0f, 1.0f, 0.0f};
-		self->collMgr.pSpeed = &v;
-
-		if (self->collMgr.calculateAboveCollision(self->collMgr.outputMaybe))
-			self->speed.y = 0.0f;
-
-		self->collMgr.pSpeed = &self->speed;
-
-	} else {
-		if (self->collMgr.calculateAboveCollision(self->collMgr.outputMaybe))
-			self->speed.y = 0.0f;
-	}
-
-	self->collMgr.calculateAdjacentCollision(0);
-
-	// Switch Direction
-	if (self->collMgr.outputMaybe & (0x15 << self->direction)) {
-		if (self->collMgr.isOnTopOfTile()) {
-			self->isBouncing = true;
-		}
-		return true;
-	}
-	return false;
-}
-
-
-int midwayFlagNewOnExecute(daChukanPoint_c* self) {
-    if (self->enableGravity) calculateTileCollisions(self);
-
-    u8 newLiquid = checkWater(self->pos.x, self->pos.y + 20.0f, self->currentLayerID, (float*)0x0);
-    if (newLiquid != self->liquid) {
-        if (newLiquid == 0) {
-            if (self->acState.getCurrentState() != &daChukanPoint_c::StateID_Wait) {
-                self->acState.setState(&daChukanPoint_c::StateID_Wait);
-                if (self->enableGravity) {
-					self->max_speed.y = -4.0;
-					self->y_speed_inc = -0.1875;
-				}
-            }
-        }
-        else {
-            if (self->acState.getCurrentState() != &daChukanPoint_c::StateID_SeaWait) {
-                self->acState.setState(&daChukanPoint_c::StateID_SeaWait);
-				if (self->enableGravity) {
-					self->max_speed.y = -1.0;
-					if (self->speed.y < -1.0) self->speed.y = -1.0;
-					self->y_speed_inc = -0.09375;
-				}
-            }
-        }
-        self->liquid = newLiquid;
-    }
-
-    int ret = midwayFlagOnExecute(self);
-    return ret;
-}
-
-bool daChukanPoint_c::isInLiquid() {
-	return this->liquid != 0;
-}
-
-void midwayFlagSetItemKinopio(daChukanPoint_c* self, dAcPy_c* player) {
-	if (!self->disablePowerUp) midwayFlagPowerUp(self, player);
-}
-
-//
-// processed\../src/signboard.cpp
-//
-
-#include <common.h>
-#include <game.h>
-#include <g3dhax.h>
-#include <sfx.h>
-
-const char* SignboardArcNameList [] = {
-	"signboard",
-	NULL
-};
-
-class dSignboard_c : public dEn_c {
-	int onCreate();
-	int onDelete();
-	int onExecute();
-	int onDraw();
-
-	mHeapAllocator_c allocator;
-	nw4r::g3d::ResFile resFile;
-	m3d::mdl_c bodyModel;
-
-	m3d::anmChr_c chrAnimation;
-
-	float XSpeed;
-	u32 cmgr_returnValue;
-	bool isBouncing;
-
-	int color, rotation, arrowDirection;
-	bool enableGravity, placeBehindOtherSprites;
-	s16 colRot;
-
-	static dSignboard_c *build();
-
-	void bindAnimChr_and_setUpdateRate(const char* name, int unk, float unk2, float rate);
-	void updateModelMatrices();
-	bool calculateTileCollisions();
-
-	USING_STATES(dSignboard_c);
-	DECLARE_STATE(Wait);
-};
-
-dSignboard_c *dSignboard_c::build() {
-	void *buffer = AllocFromGameHeap1(sizeof(dSignboard_c));
-	return new(buffer) dSignboard_c;
-}
-
-///////////////////////
-// Externs and States
-///////////////////////
-	//FIXME make this dEn_c->used...
-	extern "C" char usedForDeterminingStatePress_or_playerCollision(dEn_c* t, ActivePhysics *apThis, ActivePhysics *apOther, int unk1);
-
-
-	CREATE_STATE(dSignboard_c, Wait);
-
-
-////////////////////////
-// Collision Functions
-////////////////////////
-
-
-bool dSignboard_c::calculateTileCollisions() {
-	// Returns true if sprite should turn, false if not.
-
-	HandleXSpeed();
-	HandleYSpeed();
-	doSpriteMovement();
-
-
-	cmgr_returnValue = collMgr.isOnTopOfTile();
-	collMgr.calculateBelowCollisionWithSmokeEffect();
-
-	if (isBouncing) {
-		stuffRelatingToCollisions(0.1875f, 1.0f, 0.5f);
-		if (speed.y != 0.0f)
-			isBouncing = false;
-	}
-
-	if (collMgr.isOnTopOfTile()) {
-		// Walking into a tile branch
-
-		if (cmgr_returnValue == 0)
-			isBouncing = true;
-
-		if (speed.x != 0.0f) {
-			//playWmEnIronEffect();
-		}
-
-		speed.y = 0.0f;
-	} else {
-		x_speed_inc = 0.0f;
-	}
-
-	// Bouncing checks
-	if (_34A & 4) {
-		Vec v = (Vec){0.0f, 1.0f, 0.0f};
-		collMgr.pSpeed = &v;
-
-		if (collMgr.calculateAboveCollision(collMgr.outputMaybe))
-			speed.y = 0.0f;
-
-		collMgr.pSpeed = &speed;
-
-	} else {
-		if (collMgr.calculateAboveCollision(collMgr.outputMaybe))
-			speed.y = 0.0f;
-	}
-
-	collMgr.calculateAdjacentCollision(0);
-
-	// Switch Direction
-	if (collMgr.outputMaybe & (0x15 << direction)) {
-		if (collMgr.isOnTopOfTile()) {
-			isBouncing = true;
-		}
-		return true;
-	}
-	return false;
-}
-
-
-/*****************************************************************************/
-// Glue Code
-
-
-void dSignboard_c::bindAnimChr_and_setUpdateRate(const char* name, int unk, float unk2, float rate) {
-	nw4r::g3d::ResAnmChr anmChr = this->resFile.GetResAnmChr(name);
-	this->chrAnimation.bind(&this->bodyModel, anmChr, unk);
-	this->bodyModel.bindAnim(&this->chrAnimation, unk2);
-	this->chrAnimation.setUpdateRate(rate);
-}
-
-int dSignboard_c::onCreate() {
-	this->color = this->settings >> 28 & 0xF;
-	this->arrowDirection = this->settings >> 24 & 0xF;
-
-	// int nybble7 = this->settings >> 20 & 0xF; // unused
-
-	int nybble8 = this->settings >> 16 & 0xF;
-	this->enableGravity = nybble8 & 0b1000;
-	this->placeBehindOtherSprites = nybble8 & 0b100;
-	// bool moveSlightlyHorizontally = nybble8 & 0b10;
-	// bool moveSlightlyUp = nybble8 & 0b1;
-
-	this->rotation = this->settings & 0xFFFF;
-
-	// Model creation
-	allocator.link(-1, GameHeaps[0], 0, 0x20);
-
-	char* resName = "";
-	sprintf(resName, "g3d/t%02d.brres", this->color);
-	resName[strlen(resName)] = 0;
-	resFile.data = getResource("signboard", resName);
-	nw4r::g3d::ResMdl mdl = this->resFile.GetResMdl("signboard");
-	bodyModel.setup(mdl, &allocator, 0, 1, 0);
-	SetupTextures_MapObj(&bodyModel, 0);
-
-
-	// Animations start here
-	nw4r::g3d::ResAnmChr anmChr = this->resFile.GetResAnmChr("signboard");
-	this->chrAnimation.setup(mdl, anmChr, &this->allocator, 0);
-
-	allocator.unlink();
-
-
-	// Stuff I do understand
-	this->scale = (Vec){1.0, 1.0, 1.0};
-
-	// rotation / 0xF * 0xFFFF == rotation * 0x1111
-	// BUT 0x1111 doesn't work with some high values for some reason so I'm using 0xFFF
-	this->rot.x = 0; // X is vertical axis
-	this->rot.y = 0; // Y is horizontal axis
-	this->rot.z = (float)(this->rotation); // Z is ... an axis >.> (0xFFF ~= 22.5 degrees)
-	this->direction = 1; // Heading left.
-	
-	this->speed.x = 0.0;
-	this->speed.y = 0.0;
-	this->max_speed.x = 0.8;
-	this->x_speed_inc = 0.0;
-	this->XSpeed = 0.8;
-
-	Vec2 rotationBalance;
-	float angle = ((this->rotation / (float)(0xFFFF)) * 360.0) - 90.0;
-	if (angle < 0.0) angle += 360.0;
-	rotationBalance.x = cos(angle * M_PI / 180.0);
-	rotationBalance.y = sin(angle * M_PI / 180.0);
-
-	// if (moveSlightlyHorizontally) this->pos.x -= ((rotationBalance.x + 1.0) / 2.0) * 2.0;
-	this->pos.y += 8.0;
-
-	// if (moveSlightlyUp) this->pos.y += 4.0;
-
-	this->pos.z = placeBehindOtherSprites ? -3500.0 : 0.0;
-
-
-	// Tile collider
-
-	// These fucking rects do something for the tile rect
-	spriteSomeRectX = 28.0f;
-	spriteSomeRectY = 32.0f;
-	_320 = 0.0f;
-	_324 = 16.0f;
-
-	static const pointSensor_s below(0<<12, 0<<12);
-	static const pointSensor_s above(0<<12, 12<<12);
-	static const lineSensor_s adjacent(6<<12, 9<<12, 8<<12);
-
-	collMgr.init(this, &below, &above, &adjacent);
-	collMgr.calculateBelowCollisionWithSmokeEffect();
-
-	cmgr_returnValue = collMgr.isOnTopOfTile();
-
-	if (collMgr.isOnTopOfTile())
-		isBouncing = false;
-	else
-		isBouncing = true;
-
-
-	// State Changers
-	bindAnimChr_and_setUpdateRate("signboard", 1, 0.0, 0.0);
-	this->chrAnimation.setCurrentFrame(this->arrowDirection);
-	this->doStateChange(&StateID_Wait);
-
-	this->onExecute();
-	return true;
-}
-
-int dSignboard_c::onDelete() {
-	return true;
-}
-
-int dSignboard_c::onExecute() {
-	acState.execute();
-	updateModelMatrices();
-
-	return true;
-}
-
-int dSignboard_c::onDraw() {
-	bodyModel.scheduleForDrawing();
-	return true;
-}
-
-void dSignboard_c::updateModelMatrices() {
-	matrix.translation(pos.x, pos.y, pos.z);
-	matrix.applyRotationYXZ(&rot.x, &rot.y, &rot.z);
-
-	bodyModel.setDrawMatrix(matrix);
-	bodyModel.setScale(&scale);
-	bodyModel.calcWorld(false);
-}
-
-
-///////////////
-// Wait State
-///////////////
-void dSignboard_c::beginState_Wait() {
-	this->max_speed.x = 0;
-	this->speed.x = 0;
-
-	if (!this->enableGravity) {
-		this->max_speed.y = 0.0;
-		this->speed.y = 0.0;
-		this->y_speed_inc = 0.0;
-	} else {
-		this->max_speed.y = -4.0;
-		this->speed.y = -4.0;
-		this->y_speed_inc = -0.1875;
-	}
-}
-void dSignboard_c::executeState_Wait() {
-	if (this->enableGravity) bool ret = calculateTileCollisions();
-
-	bodyModel._vf1C();
-}
-void dSignboard_c::endState_Wait() { }
-
-//
-// processed\../src/goombrat.cpp
-//
-
-#include <common.h>
-#include <game.h>
-#include <g3dhax.h>
-#include <sfx.h>
-#include "profile.h"
-
-
-const char* GoombratArcNameList [] = {
-	"kakibo",
-	NULL
-};
-
-class daGoombrat_c : public dEn_c {
-	int onCreate();
-	int onDelete();
-	int onExecute();
-	int onDraw();
-
-	mHeapAllocator_c allocator;
-	nw4r::g3d::ResFile resFile;
-
-	m3d::mdl_c model;
-
-	m3d::anmChr_c animationChr;
-	m3d::anmTexPat_c animationPat;
-	nw4r::g3d::ResAnmTexPat anmPat;
-
-	mEf::es2 effect;
-
-	float XSpeed;
-	u32 cmgr_returnValue;
-	bool isBouncing;
-	bool stillFalling;
-
-	// StandOnTopCollider giantRider;
-
-	void bindAnimChr_and_setUpdateRate(const char* name, int unk, float unk2, float rate);
-	void updateModelMatrices();
-	bool calculateTileCollisions();
-
-	void spriteCollision(ActivePhysics *apThis, ActivePhysics *apOther);
-	void playerCollision(ActivePhysics *apThis, ActivePhysics *apOther);
-	void yoshiCollision(ActivePhysics *apThis, ActivePhysics *apOther);
-
-	bool collisionCat3_StarPower(ActivePhysics *apThis, ActivePhysics *apOther);
-	bool collisionCat14_YoshiFire(ActivePhysics *apThis, ActivePhysics *apOther);
-	bool collisionCatD_Drill(ActivePhysics *apThis, ActivePhysics *apOther);
-	bool collisionCat7_GroundPound(ActivePhysics *apThis, ActivePhysics *apOther);
-	bool collisionCat7_GroundPoundYoshi(ActivePhysics *apThis, ActivePhysics *apOther);
-	bool collisionCat9_RollingObject(ActivePhysics *apThis, ActivePhysics *apOther);
-	bool collisionCat1_Fireball_E_Explosion(ActivePhysics *apThis, ActivePhysics *apOther);
-	// bool collisionCat2_IceBall_15_YoshiIce(ActivePhysics *apThis, ActivePhysics *apOther);
-	bool collisionCat13_Hammer(ActivePhysics *apThis, ActivePhysics *apOther);
-	bool collisionCatA_PenguinMario(ActivePhysics *apThis, ActivePhysics *apOther);
-
-	bool collisionCat5_Mario(ActivePhysics *apThis, ActivePhysics *apOther);
-	bool collisionCat11_PipeCannon(ActivePhysics *apThis, ActivePhysics *apOther);
-
-	void _vf148();
-	void _vf14C();
-	bool CreateIceActors();
-
-	bool willWalkOntoSuitableGround();
-
-	USING_STATES(daGoombrat_c);
-	DECLARE_STATE(Walk);
-	DECLARE_STATE(Turn);
-	DECLARE_STATE(DieStomp);
-
-	public: static dActor_c *build();
-};
-
-dActor_c *daGoombrat_c::build() {
-	void *buffer = AllocFromGameHeap1(sizeof(daGoombrat_c));
-	return new(buffer) daGoombrat_c;
-}
-
-const SpriteData GoombratSpriteData = { ProfileId::Goombrat, 8, -8, 0, 0, 0x100, 0x100, 0, 0, 0, 0, 0 };
-Profile GoombratProfile(&daGoombrat_c::build, SpriteId::Goombrat, &GoombratSpriteData, ProfileId::Goombrat, ProfileId::Goombrat, "Goombrat", GoombratArcNameList, 0);
-
-///////////////////////
-// Externs and States
-///////////////////////
-extern "C" bool SpawnEffect(const char*, int, Vec*, S16Vec*, Vec*);
-
-//FIXME make this dEn_c->used...
-extern "C" char usedForDeterminingStatePress_or_playerCollision(dEn_c* t, ActivePhysics *apThis, ActivePhysics *apOther, int unk1);
-// extern "C" int SomeStrangeModification(dStageActor_c* actor);
-// extern "C" void DoStuffAndMarkDead(dStageActor_c *actor, Vec vector, float unk);
-extern "C" int SmoothRotation(short* rot, u16 amt, int unk2);
-// extern "C" void addToList(StandOnTopCollider *self);
-
-// extern "C" bool HandlesEdgeTurns(dEn_c* actor);
-
-
-CREATE_STATE(daGoombrat_c, Walk);
-CREATE_STATE(daGoombrat_c, Turn);
-CREATE_STATE(daGoombrat_c, DieStomp);
-
-////////////////////////
-// Collision Functions
-////////////////////////
-void daGoombrat_c::spriteCollision(ActivePhysics *apThis, ActivePhysics *apOther) {
-	u16 name = ((dEn_c*)apOther->owner)->name;
-
-	if (name == EN_COIN || name == EN_EATCOIN || name == AC_BLOCK_COIN || name == EN_COIN_JUGEM || name == EN_COIN_ANGLE
-		|| name == EN_COIN_JUMP || name == EN_COIN_FLOOR || name == EN_COIN_VOLT || name == EN_COIN_WIND
-		|| name == EN_BLUE_COIN || name == EN_COIN_WATER || name == EN_REDCOIN || name == EN_GREENCOIN
-		|| name == EN_JUMPDAI || name == EN_ITEM)
-		{ return; }
-
-	if (acState.getCurrentState() == &StateID_Walk) {
-
-		pos.x = ((pos.x - ((dEn_c*)apOther->owner)->pos.x) > 0) ? pos.x + 1.5 : pos.x - 1.5;
-		// pos.x = direction ? pos.x + 1.5 : pos.x - 1.5;
-		doStateChange(&StateID_Turn);
-	}
-
-	dEn_c::spriteCollision(apThis, apOther);
-}
-
-void daGoombrat_c::playerCollision(ActivePhysics *apThis, ActivePhysics *apOther) {
-	char hitType = usedForDeterminingStatePress_or_playerCollision(this, apThis, apOther, 2);
-
-	if (hitType == 1) {	// regular jump
-		this->_vf260(apOther->owner);
-		doStateChange(&StateID_DieStomp);
-	}
-	else if (hitType == 3) { // spin jump
-		this->_vf268(apOther->owner);
-		doStateChange(&StateID_DieSmoke);
-	}
-	else if (hitType == 0) { // sides
-		this->dEn_c::playerCollision(apThis, apOther);
-		this->_vf220(apOther->owner);
-	}
-	else if (hitType == 2) { // mini mario
-		bouncePlayer(this, 5.0);
-	}
-}
-
-void daGoombrat_c::yoshiCollision(ActivePhysics *apThis, ActivePhysics *apOther) {
-	char hitType = usedForDeterminingStatePress_or_playerCollision(this, apThis, apOther, 2);
-
-	if (hitType == 1 || hitType == 2) {	// regular jump or mini mario
-		this->_vf278(apOther->owner);
-		doStateChange(&StateID_DieSmoke);
-	}
-	else if (hitType == 3) { // spin jump
-		this->_vf268(apOther->owner);
-		doStateChange(&StateID_DieSmoke);
-	}
-	else if (hitType == 0) { // sides
-		this->dEn_c::playerCollision(apThis, apOther);
-		this->_vf220(apOther->owner);
-	}
-}
-bool daGoombrat_c::collisionCatD_Drill(ActivePhysics *apThis, ActivePhysics *apOther) {
-	PlaySound(this, SE_EMY_DOWN);
-	SpawnEffect("Wm_mr_hardhit", 0, &pos, &(S16Vec){0, 0, 0}, &(Vec){1.0, 1.0, 1.0});
-	dEn_c::_vf148();
-	return true;
-}
-bool daGoombrat_c::collisionCat7_GroundPound(ActivePhysics *apThis, ActivePhysics *apOther) {
-	return this->collisionCatD_Drill(apThis, apOther);
-}
-bool daGoombrat_c::collisionCat7_GroundPoundYoshi(ActivePhysics *apThis, ActivePhysics *apOther) {
-	return this->collisionCatD_Drill(apThis, apOther);
-}
-bool daGoombrat_c::collisionCat9_RollingObject(ActivePhysics *apThis, ActivePhysics *apOther) {
-	return this->collisionCatD_Drill(apThis, apOther);
-}
-bool daGoombrat_c::collisionCatA_PenguinMario(ActivePhysics *apThis, ActivePhysics *apOther) {
-	return this->collisionCatD_Drill(apThis, apOther);
-}
-bool daGoombrat_c::collisionCat5_Mario(ActivePhysics *apThis, ActivePhysics *apOther) {
-	return this->collisionCatD_Drill(apThis, apOther);
-}
-bool daGoombrat_c::collisionCat11_PipeCannon(ActivePhysics *apThis, ActivePhysics *apOther) {
-	return this->collisionCatD_Drill(apThis, apOther);
-}
-bool daGoombrat_c::collisionCat13_Hammer(ActivePhysics *apThis, ActivePhysics *apOther) {
-	StageE4::instance->spawnCoinJump(pos, 0, 2, 0);
-	return this->collisionCatD_Drill(apThis, apOther);
-}
-
-bool daGoombrat_c::collisionCat3_StarPower(ActivePhysics *apThis, ActivePhysics *apOther) {
-	bool wut = dEn_c::collisionCat3_StarPower(apThis, apOther);
-	return wut;
-}
-
-bool daGoombrat_c::collisionCat14_YoshiFire(ActivePhysics *apThis, ActivePhysics *apOther) {
-	return this->collisionCat1_Fireball_E_Explosion(apThis, apOther);
-}
-
-bool daGoombrat_c::collisionCat1_Fireball_E_Explosion(ActivePhysics *apThis, ActivePhysics *apOther) {
-	StageE4::instance->spawnCoinJump(pos, 0, 1, 0);
-	return this->collisionCatD_Drill(apThis, apOther);
-}
-
-// void daGoombrat_c::collisionCat2_IceBall_15_YoshiIce(ActivePhysics *apThis, ActivePhysics *apOther) {
-	
-// 	dEn_C::collisionCat2_IceBall_15_YoshiIce(apThis, apOther);
-// }
-
-// These handle the ice crap
-void daGoombrat_c::_vf148() {
-	dEn_c::_vf148();
-}
-void daGoombrat_c::_vf14C() {
-	dEn_c::_vf14C();
-}
-
-extern "C" void sub_80024C20(void);
-extern "C" void __destroy_arr(void*, void(*)(void), int, int);
-//extern "C" __destroy_arr(struct DoSomethingCool, void(*)(void), int cnt, int bar);
-
-bool daGoombrat_c::CreateIceActors() {
-	struct DoSomethingCool my_struct = { 0, this->pos, {1.25, 1.25, 1.25}, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
-	this->frzMgr.Create_ICEACTORs( (void*)&my_struct, 1 );
-	__destroy_arr( (void*)&my_struct, sub_80024C20, 0x3C, 1 );
-	this->animationChr.setUpdateRate(0.0f);
-	this->animationPat.setUpdateRateForEntry(2.0f, 0);
-	return true;
-}
-
-bool daGoombrat_c::calculateTileCollisions() {
-	// Returns true if sprite should turn, false if not.
-
-	HandleXSpeed();
-	HandleYSpeed();
-	doSpriteMovement();
-
-	cmgr_returnValue = collMgr.isOnTopOfTile();
-	collMgr.calculateBelowCollisionWithSmokeEffect();
-
-	if (isBouncing) {
-		stuffRelatingToCollisions(0.1875f, 1.0f, 0.5f);
-		if (speed.y != 0.0f)
-			isBouncing = false;
-	}
-
-	float xDelta = pos.x - last_pos.x;
-	if (xDelta >= 0.0f)
-		direction = 0;
-	else
-		direction = 1;
-
-	if (collMgr.isOnTopOfTile()) {
-		// Walking into a tile branch
-
-		if (cmgr_returnValue == 0)
-			isBouncing = true;
-
-		if (speed.x != 0.0f) {
-			//playWmEnIronEffect();
-		}
-
-		speed.y = 0.0f;
-
-		max_speed.x = (direction == 1) ? -XSpeed : XSpeed;
-	} else {
-		x_speed_inc = 0.0f;
-	}
-
-	// Bouncing checks
-	if (_34A & 4) {
-		Vec v = (Vec){0.0f, 1.0f, 0.0f};
-		collMgr.pSpeed = &v;
-
-		if (collMgr.calculateAboveCollision(collMgr.outputMaybe))
-			speed.y = 0.0f;
-
-		collMgr.pSpeed = &speed;
-
-	} else {
-		if (collMgr.calculateAboveCollision(collMgr.outputMaybe))
-			speed.y = 0.0f;
-	}
-
-	collMgr.calculateAdjacentCollision(0);
-
-	// Switch Direction
-	if (collMgr.outputMaybe & (0x15 << direction)) {
-		if (collMgr.isOnTopOfTile()) {
-			isBouncing = true;
-		}
-		return true;
-	}
-	return false;
-}
-
-void daGoombrat_c::bindAnimChr_and_setUpdateRate(const char* name, int unk, float unk2, float rate) {
-	nw4r::g3d::ResAnmChr anmChr = this->resFile.GetResAnmChr(name);
-	this->animationChr.bind(&this->model, anmChr, unk);
-	this->model.bindAnim(&this->animationChr, unk2);
-	this->animationChr.setUpdateRate(rate);
-}
-
-int daGoombrat_c::onCreate() {
-	this->stillFalling = 0;
-	int color = this->settings >> 24 & 0xF;
-
-	allocator.link(-1, GameHeaps[0], 0, 0x20);
-
-	char* resName = "";
-	sprintf(resName, "g3d/t%02d.brres", color);
-	resName[strlen(resName)] = 0;
-	this->resFile.data = getResource("kakibo", resName);
-
-	nw4r::g3d::ResMdl mdl = this->resFile.GetResMdl("kakibo");
-	model.setup(mdl, &allocator, 0x224, 1, 0);
-	SetupTextures_Enemy(&model, 0);
-
-
-	// Animations start here
-	bool ret;
-	nw4r::g3d::ResAnmChr anmChr = this->resFile.GetResAnmChr("walk");
-	ret = this->animationChr.setup(mdl, anmChr, &this->allocator, 0);
-
-	this->anmPat = this->resFile.GetResAnmTexPat("walk");
-	this->animationPat.setup(mdl, anmPat, &this->allocator, 0, 1);
-	this->animationPat.bindEntry(&this->model, &anmPat, 0, 1);
-	this->animationPat.setFrameForEntry(0, 0);
-	this->animationPat.setUpdateRateForEntry(2.0f, 0);
-	this->model.bindAnim(&this->animationPat);
-
-	allocator.unlink();
-
-	// Stuff I do understand
-
-	this->scale = (Vec){1.0, 1.0, 1.0};
-
-	this->rot.x = 0; // X is vertical axis
-	this->rot.y = 0xD800; // Y is horizontal axis
-	this->rot.z = 0; // Z is ... an axis >.>
-	this->direction = 1; // Heading left.
-	
-	this->speed.x = 0.0;
-	this->speed.y = 0.0;
-	this->max_speed.x = 0.5;
-	this->x_speed_inc = 0.15;
-	this->XSpeed = 0.5;
-
-
-	ActivePhysics::Info HitMeBaby;
-
-	// Note: if this gets changed, also change the point where the default
-	// values are assigned after de-ballooning
-	HitMeBaby.xDistToCenter = 0.0;
-	HitMeBaby.yDistToCenter = 8.0;
-	HitMeBaby.xDistToEdge = 8.0;
-	HitMeBaby.yDistToEdge = 8.0;
-
-	HitMeBaby.category1 = 0x3;
-	HitMeBaby.category2 = 0x0;
-	HitMeBaby.bitfield1 = 0x6F;
-	HitMeBaby.bitfield2 = 0xffbafffe;
-	HitMeBaby.unkShort1C = 0;
-	HitMeBaby.callback = &dEn_c::collisionCallback;
-
-	this->aPhysics.initWithStruct(this, &HitMeBaby);
-	this->aPhysics.addToList();
-
-
-	// Tile collider
-
-	// These fucking rects do something for the tile rect
-	spriteSomeRectX = 28.0f;
-	spriteSomeRectY = 32.0f;
-	_320 = 0.0f;
-	_324 = 16.0f;
-
-	// These structs tell stupid collider what to collide with - these are from koopa troopa
-	static const lineSensor_s below(-5<<12, 5<<12, 0<<12);
-	static const pointSensor_s above(0<<12, 12<<12);
-	static const lineSensor_s adjacent(6<<12, 9<<12, 6<<12);
-
-	collMgr.init(this, &below, &above, &adjacent);
-	collMgr.calculateBelowCollisionWithSmokeEffect();
-
-	cmgr_returnValue = collMgr.isOnTopOfTile();
-
-	if (collMgr.isOnTopOfTile())
-		isBouncing = false;
-	else
-		isBouncing = true;
-
-	bindAnimChr_and_setUpdateRate("walk", 1, 0.0, 2.0);
-	doStateChange(&StateID_Walk);
-
-	this->onExecute();
-	return true;
-}
-
-int daGoombrat_c::onDelete() {
-	return true;
-}
-
-int daGoombrat_c::onExecute() {
-	acState.execute();
-	updateModelMatrices();
-	model._vf1C();
-
-	return true;
-}
-
-int daGoombrat_c::onDraw() {
-	model.scheduleForDrawing();
-	return true;
-}
-
-void daGoombrat_c::updateModelMatrices() {
-	// This won't work with wrap because I'm lazy.
-
-	if (this->frzMgr._mstate == 1)
-		matrix.translation(pos.x, pos.y + 2.0, pos.z);
-	else
-		matrix.translation(pos.x, pos.y, pos.z);
-	matrix.applyRotationYXZ(&rot.x, &rot.y, &rot.z);
-
-	model.setDrawMatrix(matrix);
-	model.setScale(&scale);
-	model.calcWorld(false);
-}
-
-
-bool daGoombrat_c::willWalkOntoSuitableGround() {
-	static const float deltas[] = {1.5f, -1.5f};
-	VEC3 checkWhere = {
-			pos.x + deltas[direction],
-			4.0f + pos.y,
-			pos.z
-		};
-
-	u32 props = collMgr.getTileBehaviour2At(checkWhere.x, checkWhere.y, currentLayerID);
-
-	//if (getSubType(props) == B_SUB_LEDGE)
-	if (((props >> 16) & 0xFF) == 8)
-		return false;
-
-	float someFloat = 0.0f;
-	if (collMgr.sub_800757B0(&checkWhere, &someFloat, currentLayerID, 1, -1)) {
-		if (someFloat < checkWhere.y && someFloat > (pos.y - 5.0f))
-			return true;
-	}
-
-	return false;
-}
-
-///////////////
-// Walk State
-///////////////
-void daGoombrat_c::beginState_Walk() {
-	this->max_speed.x = (this->direction) ? -this->XSpeed : this->XSpeed;
-	this->speed.x = (direction) ? -0.5f : 0.5f;
-
-	this->max_speed.y = -4.0;
-	this->speed.y = -4.0;
-	this->y_speed_inc = -0.1875;
-
-	this->animationChr.setUpdateRate(2.0);
-	this->animationPat.setUpdateRateForEntry(2.0f, 0);
-}
-void daGoombrat_c::executeState_Walk() {
-	if (collMgr.isOnTopOfTile()) {
-		stillFalling = false;
-
-		if (!willWalkOntoSuitableGround()) {
-			pos.x = direction ? pos.x + 1.5 : pos.x - 1.5;
-			doStateChange(&StateID_Turn);
-		}
-	}
-	else {
-		if (!stillFalling) {
-			stillFalling = true;
-			pos.x = direction ? pos.x + 1.5 : pos.x - 1.5;
-			doStateChange(&StateID_Turn);
-		}
-	}
-
-
-	bool ret = calculateTileCollisions();
-	if (ret) {
-		doStateChange(&StateID_Turn);
-	}
-
-	if (this->animationChr.isAnimationDone()) {
-		this->animationChr.setCurrentFrame(0.0);
-	}
-	if (this->animationPat.isEntryAnimationDone(0)) {
-		this->animationPat.setFrameForEntry(0, 0);
-		this->animationPat.setUpdateRateForEntry(2.0f, 0);
-	}
-}
-void daGoombrat_c::endState_Walk() { }
-
-///////////////
-// Turn State
-///////////////
-void daGoombrat_c::beginState_Turn() {
-
-	this->direction ^= 1;
-	this->speed.x = 0.0;
-}
-void daGoombrat_c::executeState_Turn() {
-
-	if (this->animationChr.isAnimationDone()) {
-		this->animationChr.setCurrentFrame(0.0);
-	}
-
-	if (this->animationPat.isEntryAnimationDone(0)) {
-		this->animationPat.setFrameForEntry(0, 0);
-		this->animationPat.setUpdateRateForEntry(2.0f, 0);
-	}
-
-	u16 amt = (this->direction == 0) ? 0x2800 : 0xD800;
-	int done = SmoothRotation(&this->rot.y, amt, 0x800);
-
-	if(done) {
-		this->doStateChange(&StateID_Walk);
-	}
-}
-void daGoombrat_c::endState_Turn() { }
-
-///////////////
-// Die by Stomp State
-///////////////
-void daGoombrat_c::beginState_DieStomp() {
-	this->removeMyActivePhysics();
-
-	bindAnimChr_and_setUpdateRate("damage", 1, 0.0, 1.0);
-	this->rot.y = 0;
-	this->rot.x = 0;
-}
-void daGoombrat_c::executeState_DieStomp() {
-	if(this->animationChr.isAnimationDone()) {
-		this->Delete(true);
-	}
-}
-void daGoombrat_c::endState_DieStomp() { }
-
-//
-// processed\../src/tenten.cpp
-//
-
-#include <common.h>
-#include <game.h>
-#include "profile.h"
-#include <sfx.h>
-#include "path.h"
-
-const char* TentenFileList[] = { "tenten", 0 };
-
-
-class daEnTenten_c : public dEn_c {
-public:
-	int onCreate();
-	int onExecute();
-	int onDelete();
-	int onDraw();
-
-	mHeapAllocator_c allocator;
-	nw4r::g3d::ResFile resFile;
-	m3d::mdl_c model;
-
-	nw4r::g3d::ResAnmTexPat anmPat;
-
-	m3d::anmChr_c animationChr;
-	m3d::anmTexPat_c animationPat;
-
-	bool facingRight;
-	float wSpeed;
-	u8 wDistance;
-	int edgeMin, edgeMax;
-    u16 amtRotate;
-
-	float XSpeed;
-	u32 cmgr_returnValue;
-	bool isBouncing;
-
-	bool ranOnce;
-
-	int sfxTimer;
-	nw4r::snd::SoundHandle handle; // Sound Handle
-
-	static dActor_c* build();
-
-	void bindAnimChr_and_setUpdateRate(const char* name, int unk, float unk2, float rate);
-
-	void updateModelMatrices();
-	void spriteCollision(ActivePhysics *apThis, ActivePhysics *apOther);
-	void playerCollision(ActivePhysics *apThis, ActivePhysics *apOther);
-	void yoshiCollision(ActivePhysics *apThis, ActivePhysics *apOther);
-
-	bool collisionCat3_StarPower(ActivePhysics *apThis, ActivePhysics *apOther);
-	bool collisionCat14_YoshiFire(ActivePhysics *apThis, ActivePhysics *apOther);
-	bool collisionCatD_Drill(ActivePhysics *apThis, ActivePhysics *apOther);
-	bool collisionCat7_GroundPound(ActivePhysics *apThis, ActivePhysics *apOther);
-	bool collisionCat7_GroundPoundYoshi(ActivePhysics *apThis, ActivePhysics *apOther);
-	bool collisionCat9_RollingObject(ActivePhysics *apThis, ActivePhysics *apOther);
-	bool collisionCat1_Fireball_E_Explosion(ActivePhysics *apThis, ActivePhysics *apOther);
-	// bool collisionCat2_IceBall_15_YoshiIce(ActivePhysics *apThis, ActivePhysics *apOther);
-	bool collisionCat13_Hammer(ActivePhysics *apThis, ActivePhysics *apOther);
-	bool collisionCatA_PenguinMario(ActivePhysics *apThis, ActivePhysics *apOther);
-
-	bool collisionCat5_Mario(ActivePhysics *apThis, ActivePhysics *apOther);
-	bool collisionCat11_PipeCannon(ActivePhysics *apThis, ActivePhysics *apOther);
-
-	void _vf148();
-	void _vf14C();
-	bool CreateIceActors();
-	bool calculateTileCollisions();
-	bool willWalkOntoSuitableGround();
-
-	void playsound(int id);
-	void executePlaysound();
-    float getValueOfCurve(float ratio, float curveRatioVar, float minValue);
-
-	USING_STATES(daEnTenten_c);
-	DECLARE_STATE(Walk);
-    DECLARE_STATE(Turn);
-	DECLARE_STATE(DieStomp);
-};
-
-const SpriteData TentenSpriteData = { ProfileId::Tenten, 8, -8 , 0 , 0, 0x100, 0x100, 0, 0, 0, 0, 0b10000 };
-Profile TentenProfile(&daEnTenten_c::build, SpriteId::Tenten, &TentenSpriteData, ProfileId::Tenten, ProfileId::Tenten, "Tenten", TentenFileList);
-
-
-
-u8 hijackMusicWithSongName(const char* songName, int themeID, bool hasFast, int channelCount, int trackCount, int* wantRealStreamID);
-extern "C" char usedForDeterminingStatePress_or_playerCollision(dEn_c* t, ActivePhysics *apThis, ActivePhysics *apOther, int unk1);
-extern "C" int SmoothRotation(short* rot, u16 amt, int unk2);
-
-CREATE_STATE(daEnTenten_c, Walk);
-CREATE_STATE(daEnTenten_c, Turn);
-CREATE_STATE(daEnTenten_c, DieStomp);
-
-void daEnTenten_c::spriteCollision(ActivePhysics *apThis, ActivePhysics *apOther) {
-	u16 name = ((dEn_c*)apOther->owner)->name;
-
-	if (name == EN_COIN || name == EN_EATCOIN || name == AC_BLOCK_COIN || name == EN_COIN_JUGEM || name == EN_COIN_ANGLE
-		|| name == EN_COIN_JUMP || name == EN_COIN_FLOOR || name == EN_COIN_VOLT || name == EN_COIN_WIND
-		|| name == EN_BLUE_COIN || name == EN_COIN_WATER || name == EN_REDCOIN || name == EN_GREENCOIN
-		|| name == EN_JUMPDAI || name == EN_ITEM)
-		{ return; }
-
-	if (acState.getCurrentState() == &StateID_Walk) {
-
-		pos.x = ((pos.x - ((dEn_c*)apOther->owner)->pos.x) > 0) ? pos.x + 1.5 : pos.x - 1.5;
-		// pos.x = direction ? pos.x + 1.5 : pos.x - 1.5;
-		doStateChange(&StateID_Turn);
-	}
-
-	dEn_c::spriteCollision(apThis, apOther);
-}
-
-void daEnTenten_c::playerCollision(ActivePhysics *apThis, ActivePhysics *apOther) {
-	char hitType = usedForDeterminingStatePress_or_playerCollision(this, apThis, apOther, 2);
-
-	if (hitType == 1) {	// regular jump
-		this->_vf260(apOther->owner);
-		doStateChange(&StateID_DieStomp);
-	}
-	else if (hitType == 3) { // spin jump
-		this->_vf268(apOther->owner);
-		doStateChange(&StateID_DieSmoke);
-	}
-	else if (hitType == 0) { // sides
-		this->dEn_c::playerCollision(apThis, apOther);
-		this->_vf220(apOther->owner);
-	}
-	else if (hitType == 2) { // mini mario
-		bouncePlayer(this, 5.0);
-	}
-}
-
-void daEnTenten_c::yoshiCollision(ActivePhysics *apThis, ActivePhysics *apOther) {
-	char hitType = usedForDeterminingStatePress_or_playerCollision(this, apThis, apOther, 2);
-
-	if (hitType == 1 || hitType == 2) {	// regular jump or mini mario
-		this->_vf278(apOther->owner);
-		doStateChange(&StateID_DieSmoke);
-	}
-	else if (hitType == 3) { // spin jump
-		this->_vf268(apOther->owner);
-		doStateChange(&StateID_DieSmoke);
-	}
-	else if (hitType == 0) { // sides
-		this->dEn_c::playerCollision(apThis, apOther);
-		this->_vf220(apOther->owner);
-	}
-}
-bool daEnTenten_c::collisionCatD_Drill(ActivePhysics *apThis, ActivePhysics *apOther) {
-	PlaySound(this, SE_EMY_DOWN);
-	SpawnEffect("Wm_mr_hardhit", 0, &pos, &(S16Vec){0, 0, 0}, &(Vec){1.0, 1.0, 1.0});
-	dEn_c::_vf148();
-	return true;
-}
-bool daEnTenten_c::collisionCat7_GroundPound(ActivePhysics *apThis, ActivePhysics *apOther) {
-	return this->collisionCatD_Drill(apThis, apOther);
-}
-bool daEnTenten_c::collisionCat7_GroundPoundYoshi(ActivePhysics *apThis, ActivePhysics *apOther) {
-	return this->collisionCatD_Drill(apThis, apOther);
-}
-bool daEnTenten_c::collisionCat9_RollingObject(ActivePhysics *apThis, ActivePhysics *apOther) {
-	return this->collisionCatD_Drill(apThis, apOther);
-}
-bool daEnTenten_c::collisionCatA_PenguinMario(ActivePhysics *apThis, ActivePhysics *apOther) {
-	return this->collisionCatD_Drill(apThis, apOther);
-}
-bool daEnTenten_c::collisionCat5_Mario(ActivePhysics *apThis, ActivePhysics *apOther) {
-	return this->collisionCatD_Drill(apThis, apOther);
-}
-bool daEnTenten_c::collisionCat11_PipeCannon(ActivePhysics *apThis, ActivePhysics *apOther) {
-	return this->collisionCatD_Drill(apThis, apOther);
-}
-bool daEnTenten_c::collisionCat13_Hammer(ActivePhysics *apThis, ActivePhysics *apOther) {
-	StageE4::instance->spawnCoinJump(pos, 0, 2, 0);
-	return this->collisionCatD_Drill(apThis, apOther);
-}
-
-bool daEnTenten_c::collisionCat3_StarPower(ActivePhysics *apThis, ActivePhysics *apOther) {
-	bool wut = dEn_c::collisionCat3_StarPower(apThis, apOther);
-	return wut;
-}
-
-bool daEnTenten_c::collisionCat14_YoshiFire(ActivePhysics *apThis, ActivePhysics *apOther) {
-	return this->collisionCat1_Fireball_E_Explosion(apThis, apOther);
-}
-
-bool daEnTenten_c::collisionCat1_Fireball_E_Explosion(ActivePhysics *apThis, ActivePhysics *apOther) {
-	StageE4::instance->spawnCoinJump(pos, 0, 1, 0);
-	return this->collisionCatD_Drill(apThis, apOther);
-}
-
-// void daEnTenten_c::collisionCat2_IceBall_15_YoshiIce(ActivePhysics *apThis, ActivePhysics *apOther) {
-	
-// 	dEn_C::collisionCat2_IceBall_15_YoshiIce(apThis, apOther);
-// }
-
-
-// These handle the ice crap
-void daEnTenten_c::_vf148() {
-	dEn_c::_vf148();
-}
-void daEnTenten_c::_vf14C() {
-	dEn_c::_vf14C();
-}
-
-extern "C" void sub_80024C20(void);
-extern "C" void __destroy_arr(void*, void(*)(void), int, int);
-//extern "C" __destroy_arr(struct DoSomethingCool, void(*)(void), int cnt, int bar);
-
-bool daEnTenten_c::CreateIceActors() {
-	struct DoSomethingCool my_struct = { 0, {this->pos.x, this->pos.y - 12.0, this->pos.z}, {1.7, 1.4, 2.0}, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
-	this->frzMgr.Create_ICEACTORs( (void*)&my_struct, 1 );
-	__destroy_arr( (void*)&my_struct, sub_80024C20, 0x3C, 1 );
-	this->animationChr.setUpdateRate(0.0f);
-	return true;
-}
-
-
-bool daEnTenten_c::calculateTileCollisions() {
-	// Returns true if sprite should turn, false if not.
-	HandleXSpeed();
-	HandleYSpeed();
-	doSpriteMovement();
-
-	cmgr_returnValue = collMgr.isOnTopOfTile();
-	collMgr.calculateBelowCollisionWithSmokeEffect();
-
-	if (isBouncing) {
-		stuffRelatingToCollisions(0.1875f, 1.0f, 0.5f);
-		if (speed.y != 0.0f)
-			isBouncing = false;
-	}
-
-	if (collMgr.isOnTopOfTile()) {
-		// Walking into a tile branch
-
-		if (cmgr_returnValue == 0) {
-			isBouncing = true;
-		}
-
-		speed.y = 0.0f;
-	} else {
-		x_speed_inc = 0.0f;
-	}
-
-	// Bouncing checks
-	if (_34A & 4) {
-		Vec v = (Vec){0.0f, 1.0f, 0.0f};
-		collMgr.pSpeed = &v;
-
-		if (collMgr.calculateAboveCollision(collMgr.outputMaybe))
-			speed.y = 0.0f;
-
-		collMgr.pSpeed = &speed;
-
-	} else {
-		if (collMgr.calculateAboveCollision(collMgr.outputMaybe))
-			speed.y = 0.0f;
-	}
-
-	collMgr.calculateAdjacentCollision(0);
-
-	// Switch Direction
-	if (collMgr.outputMaybe & (0x15 << (!facingRight))) {
-		if (collMgr.isOnTopOfTile()) {
-			isBouncing = true;
-		}
-		return true;
-	}
-	return false;
-}
-
-bool daEnTenten_c::willWalkOntoSuitableGround() {
-	static const float deltas[] = {-2.0f, 2.0f};
-	VEC3 checkWhere = {
-			pos.x + deltas[(int)facingRight],
-			4.0f + pos.y,
-			// pos.y - 4.0f,
-			pos.z
-		};
-
-	u32 props = collMgr.getTileBehaviour2At(checkWhere.x, checkWhere.y, currentLayerID);
-
-	//if (getSubType(props) == B_SUB_LEDGE)
-	if (((props >> 16) & 0xFF) == 8)
-		return false;
-
-	float someFloat = 0.0f;
-	if (collMgr.sub_800757B0(&checkWhere, &someFloat, currentLayerID, 1, -1)) {
-		if (someFloat < checkWhere.y && someFloat > (pos.y - 10.0f))
-			return true;
-	}
-
-	return false;
-}
-
-
-dActor_c* daEnTenten_c::build() {
-	void* buffer = AllocFromGameHeap1(sizeof(daEnTenten_c));
-	daEnTenten_c* c = new(buffer) daEnTenten_c;
-
-	return c;
-}
-
-
-void daEnTenten_c::bindAnimChr_and_setUpdateRate(const char* name, int unk, float unk2, float rate)
-{
-	nw4r::g3d::ResAnmChr anmChr = this->resFile.GetResAnmChr(name);
-	this->animationChr.bind(&this->model, anmChr, unk);
-	this->model.bindAnim(&this->animationChr, unk2);
-	this->animationChr.setUpdateRate(rate);
-}
-
-int daEnTenten_c::onCreate() {
-	if(!this->ranOnce) {
-		this->ranOnce = true;
-		return false;
-	}
-	this->sfxTimer = 0;
-
-	int color = (this->eventId1 & 0xF0) >> 4;
-    int groupId = (this->settings >> 24) & 0xFF;
-	
-	this->deleteForever = false; //makes the death state being used in preExecute
-
-	// Model creation
-	allocator.link(-1, GameHeaps[0], 0, 0x20);
-
-	char* resName = "";
-	sprintf(resName, "g3d/t%02d.brres", color);
-	resName[strlen(resName)] = 0;
-
-	this->resFile.data = getResource("tenten", resName);
-	nw4r::g3d::ResMdl mdl = this->resFile.GetResMdl("tenten");
-	model.setup(mdl, &allocator, 0x227, 1, 0);
-	SetupTextures_Enemy(&model, 0);
-
-	nw4r::g3d::ResAnmChr anmChr = this->resFile.GetResAnmChr("walk");
-	this->animationChr.setup(mdl, anmChr, &this->allocator, 0);
-
-	this->anmPat = this->resFile.GetResAnmTexPat("tenten");
-	this->animationPat.setup(mdl, anmPat, &this->allocator, 0, 1);
-	this->animationPat.bindEntry(&this->model, &anmPat, 0, 1);
-	this->animationPat.setFrameForEntry(((this->eventId1 & 0xF) % 5), 0);
-	this->animationPat.setUpdateRateForEntry(0.0f, 0);
-	this->model.bindAnim(&this->animationPat);
-
-	allocator.unlink();
-
-	ActivePhysics::Info HitMeBaby;
-
-	HitMeBaby.xDistToCenter = 0.0;
-	HitMeBaby.yDistToCenter = 0.0;
-
-	HitMeBaby.xDistToEdge = 10.0;
-	HitMeBaby.yDistToEdge = 8.0;
-
-	HitMeBaby.category1 = 0x3;
-	HitMeBaby.category2 = 0x0;
-	HitMeBaby.bitfield1 = 0x6F;
-	HitMeBaby.bitfield2 = 0xffbafffe;
-	HitMeBaby.unkShort1C = 0;
-	HitMeBaby.callback = &dEn_c::collisionCallback;
-
-	this->aPhysics.initWithStruct(this, &HitMeBaby);
-	this->aPhysics.addToList();
-
-
-	this->facingRight = eventId2 >> 2 & 1;
-	this->wDistance = (settings >> 16 & 0xFF) * 8;
-	this->wSpeed = (settings >> 12 & 0xF) * 0.1;
-
-	this->scale = (Vec){0.15, 0.15, 0.15};
-
-	this->rot.x = 0;
-	if (facingRight) this->rot.y = 0x2800;
-	else this->rot.y = 0xD800;
-	this->rot.z = 0;
-
-	this->edgeMin = this->pos.x - this->wDistance;
-    this->edgeMax = this->pos.x + this->wDistance;
-
-	bindAnimChr_and_setUpdateRate("walk", 1, 0.0, 1.0);
-
-	// Tile collider
-
-	// These fucking rects do something for the tile rect
-	spriteSomeRectX = 28.0f;
-	spriteSomeRectY = 32.0f;
-	_320 = 0.0f;
-	_324 = 16.0f;
-
-	static const lineSensor_s below(10<<12, -10<<12, -8<<12);
-	static const pointSensor_s above(0<<12, 8<<12);
-	static const lineSensor_s adjacent(-7<<12, 7<<12, 10<<12);
-
-	collMgr.init(this, &below, &above, &adjacent);
-	collMgr.calculateBelowCollisionWithSmokeEffect();
-
-	cmgr_returnValue = collMgr.isOnTopOfTile();
-
-	if (collMgr.isOnTopOfTile())
-		isBouncing = false;
-	else
-		isBouncing = true;
-
-	if (this->wDistance == 0 || this->wSpeed == 0) this->rot.y = 0;
-	doStateChange(&StateID_Walk);
-
-	this->onExecute();
-	return true;
-}
-
-
-int daEnTenten_c::onDelete() {
-	return true;
-}
-
-int daEnTenten_c::onDraw() {
-	model.scheduleForDrawing();
-	return true;
-}
-
-
-void daEnTenten_c::updateModelMatrices() {
-	matrix.translation(pos.x, pos.y - 8, pos.z);
-	matrix.applyRotationYXZ(&rot.x, &rot.y, &rot.z);
-
-	model.setDrawMatrix(matrix);
-	model.setScale(&scale);
-	model.calcWorld(false);
-}
-
-int daEnTenten_c::onExecute() {
-	acState.execute();
-	model._vf1C();
-	updateModelMatrices();
-
-	return true;
-}
-
-void daEnTenten_c::executePlaysound() {
-	this->sfxTimer++;
-
-	switch (this->sfxTimer) {
-		case 8:
-			this->playsound(SFX_TENTEN_STEP_L);
-			break;
-
-		case 27:
-			this->playsound(SFX_TENTEN_STEP_R);
-			break;
-	}
-
-	if (this->sfxTimer > 38) this->sfxTimer = 0;
-}
-
-void daEnTenten_c::playsound(int id) {
-	ClassWithCameraInfo *cwci = ClassWithCameraInfo::instance;
-	Vec2 dist = {
-		cwci->screenCenterX - this->pos.x,
-		cwci->screenCenterY - this->pos.y
-	};
-	float volume = max<float>(0.0, (1.0 - (sqrtf(dist.x * dist.x + dist.y * dist.y) / 500.0)) * 1.0);
-	if (volume <= 0.0) return;
-	else if (volume > 1.0) volume = 1.0;
-
-	PlaySoundWithFunctionB4(SoundRelatedClass, &this->handle, id, 1);
-	handle.SetVolume(volume, 1);
-}
-
-float daEnTenten_c::getValueOfCurve(float ratio, float curveRatioVar, float minValue) {
-    float curveRatio = 1.0 - curveRatioVar;
-
-    if (ratio < curveRatioVar) {
-        float r = ratio / curveRatioVar;
-        return sin(r * (M_PI / 2.0)) / (1.0 / minValue) + minValue;
-    }
-    else if (ratio < curveRatio) {
-        return 1.0;
-    }
-    else {
-        float r = (ratio - curveRatio) / curveRatioVar;
-        return (1 - sin(r * (M_PI / 2.0))) / (1.0 / minValue) + minValue;
-    }
-}
-
-///////////////
-// Walk State
-///////////////
-void daEnTenten_c::beginState_Walk() {
-    this->wSpeed = this->facingRight ? abs(this->wSpeed) : -abs(this->wSpeed);
-	this->animationChr.setUpdateRate(1.0f);
-}
-void daEnTenten_c::executeState_Walk() {
-	bool ret = calculateTileCollisions();
-	this->executePlaysound();
-
-	if (this->animationChr.getUpdateRate() == 0.0f) this->animationChr.setUpdateRate(1.0f);
-	else if (this->animationChr.isAnimationDone()) this->animationChr.setCurrentFrame(0.0);
-
-	if (this->wDistance == 0 || this->wSpeed == 0) return;
-
-	if (ret) {
-		doStateChange(&StateID_Turn);
-		return;
-	}
-
-	if (!willWalkOntoSuitableGround()) {
-		pos.x = facingRight ? pos.x - 1.5 : pos.x + 1.5;
-		doStateChange(&StateID_Turn);
-		return;
-	}
-
-    float dist = this->edgeMax - this->edgeMin;
-    float distRatio;
-    if (dist > 8.0) distRatio = 4.0 / dist;
-    else distRatio = 0.5;
-
-    float pos = this->pos.x - this->edgeMin;
-    float ratio = pos / dist;
-    float ratioCurve = this->getValueOfCurve(ratio, distRatio, 0.5);
-
-    float newSpeed = this->wSpeed * ratioCurve;
-	this->pos.x += newSpeed;
-
-    if (this->facingRight) {
-        if (this->pos.x > this->edgeMax) {
-            this->pos.x = this->edgeMax;
-            doStateChange(&StateID_Turn);
-        }
-    }
-    else {
-        if (this->pos.x < this->edgeMin) {
-            this->pos.x = this->edgeMin;
-            doStateChange(&StateID_Turn);
-        }
-    }
-}
-void daEnTenten_c::endState_Walk() { }
-
-///////////////
-// Turn State
-///////////////
-void daEnTenten_c::beginState_Turn() {
-	this->facingRight = !this->facingRight;
-	this->animationChr.setUpdateRate(1.0f);
-}
-void daEnTenten_c::executeState_Turn() {
-	calculateTileCollisions();
-	this->executePlaysound();
-
-    if (this->animationChr.getUpdateRate() == 0.0f) this->animationChr.setUpdateRate(1.0f);
-	else if (this->animationChr.isAnimationDone()) this->animationChr.setCurrentFrame(0.0);
-
-    u16 amt = (this->facingRight == 1) ? 0x2800 : 0xD800;
-    int done = SmoothRotation(&this->rot.y, amt, 0x800);
-
-    if(done) {
-        doStateChange(&StateID_Walk);
-    }
-}
-void daEnTenten_c::endState_Turn() { }
-
-///////////////
-// Die by Stomp State
-///////////////
-void daEnTenten_c::beginState_DieStomp() {
-	this->removeMyActivePhysics();
-
-	bindAnimChr_and_setUpdateRate("damage", 1, 0.0, 1.0);
-	this->rot.y = 0;
-	this->rot.x = 0;
-}
-void daEnTenten_c::executeState_DieStomp() {
-	if(this->animationChr.isAnimationDone()) this->Delete(true);
-}
-void daEnTenten_c::endState_DieStomp() { }
-
-//
-// processed\../src/tentenWing.cpp
-//
-
-#include <common.h>
-#include <game.h>
-#include "profile.h"
-#include <sfx.h>
-#include "path.h"
-
-const char* TentenWingFileList[] = { "tenten_wing", 0 };
-
-
-class daEnPataTenten_c : public dEnPath_c {
-public:
-	int onCreate();
-	int onExecute();
-	int onDelete();
-	int onDraw();
-
-	mHeapAllocator_c allocator;
-	nw4r::g3d::ResFile resFile;
-	m3d::mdl_c model;
-
-	nw4r::g3d::ResAnmTexPat anmPat;
-
-	m3d::anmChr_c animationChr;
-	m3d::anmTexPat_c animationPat;
-
-	bool linearMovement, upDown;
-
-	bool facingRightUp;
-	float wSpeed;
-	u8 wDistance;
-	int edgeMin, edgeMax;
-    u16 amtRotate;
-
-	int stepCount;
-
-	bool ranOnce;
-
-	int sfxTimer;
-	nw4r::snd::SoundHandle handle; // Sound Handle
-
-	static dActor_c* build();
-
-	void bindAnimChr_and_setUpdateRate(const char* name, int unk, float unk2, float rate);
-
-	void updateModelMatrices();
-	void playerCollision(ActivePhysics *apThis, ActivePhysics *apOther);
-	void yoshiCollision(ActivePhysics *apThis, ActivePhysics *apOther);
-
-	bool collisionCat3_StarPower(ActivePhysics *apThis, ActivePhysics *apOther);
-	bool collisionCat14_YoshiFire(ActivePhysics *apThis, ActivePhysics *apOther);
-	bool collisionCatD_Drill(ActivePhysics *apThis, ActivePhysics *apOther);
-	bool collisionCat7_GroundPound(ActivePhysics *apThis, ActivePhysics *apOther);
-	bool collisionCat7_GroundPoundYoshi(ActivePhysics *apThis, ActivePhysics *apOther);
-	bool collisionCat9_RollingObject(ActivePhysics *apThis, ActivePhysics *apOther);
-	bool collisionCat1_Fireball_E_Explosion(ActivePhysics *apThis, ActivePhysics *apOther);
-	// bool collisionCat2_IceBall_15_YoshiIce(ActivePhysics *apThis, ActivePhysics *apOther);
-	bool collisionCat13_Hammer(ActivePhysics *apThis, ActivePhysics *apOther);
-	bool collisionCatA_PenguinMario(ActivePhysics *apThis, ActivePhysics *apOther);
-
-	bool collisionCat5_Mario(ActivePhysics *apThis, ActivePhysics *apOther);
-	bool collisionCat11_PipeCannon(ActivePhysics *apThis, ActivePhysics *apOther);
-
-	void _vf148();
-	void _vf14C();
-	bool CreateIceActors();
-
-	void playsound(int id);
-	void executePlaysound();
-    float getValueOfCurve(float ratio, float curveRatioVar, float minValue);
-
-	USING_STATES(daEnPataTenten_c);
-	DECLARE_STATE(Wait);
-    DECLARE_STATE(Turn);
-	DECLARE_STATE(FollowPath);
-	DECLARE_STATE(DieStomp);
-};
-
-const SpriteData TentenWingSpriteData = { ProfileId::TentenWing, 8, -8 , 0 , 0, 0x100, 0x100, 0, 0, 0, 0, 0b10000 };
-Profile TentenWingProfile(&daEnPataTenten_c::build, SpriteId::TentenWing, &TentenWingSpriteData, ProfileId::TentenWing, ProfileId::TentenWing, "TentenWing", TentenWingFileList);
-
-
-
-u8 hijackMusicWithSongName(const char* songName, int themeID, bool hasFast, int channelCount, int trackCount, int* wantRealStreamID);
-extern "C" char usedForDeterminingStatePress_or_playerCollision(dEn_c* t, ActivePhysics *apThis, ActivePhysics *apOther, int unk1);
-extern "C" int SmoothRotation(short* rot, u16 amt, int unk2);
-
-CREATE_STATE(daEnPataTenten_c, Wait);
-CREATE_STATE(daEnPataTenten_c, Turn);
-CREATE_STATE(daEnPataTenten_c, FollowPath);
-CREATE_STATE(daEnPataTenten_c, DieStomp);
-
-void daEnPataTenten_c::playerCollision(ActivePhysics *apThis, ActivePhysics *apOther) {
-	char hitType = usedForDeterminingStatePress_or_playerCollision(this, apThis, apOther, 2);
-
-	if (hitType == 1) {	// regular jump
-		this->_vf260(apOther->owner);
-		doStateChange(&StateID_DieStomp);
-	}
-	else if (hitType == 3) { // spin jump
-		this->_vf268(apOther->owner);
-		doStateChange(&StateID_DieSmoke);
-	}
-	else if (hitType == 0) { // sides
-		this->dEn_c::playerCollision(apThis, apOther);
-		this->_vf220(apOther->owner);
-	}
-	else if (hitType == 2) { // mini mario
-		bouncePlayer(this, 5.0);
-	}
-}
-
-void daEnPataTenten_c::yoshiCollision(ActivePhysics *apThis, ActivePhysics *apOther) {
-	char hitType = usedForDeterminingStatePress_or_playerCollision(this, apThis, apOther, 2);
-
-	if (hitType == 1 || hitType == 2) {	// regular jump or mini mario
-		this->_vf278(apOther->owner);
-		doStateChange(&StateID_DieSmoke);
-	}
-	else if (hitType == 3) { // spin jump
-		this->_vf268(apOther->owner);
-		doStateChange(&StateID_DieSmoke);
-	}
-	else if (hitType == 0) { // sides
-		this->dEn_c::playerCollision(apThis, apOther);
-		this->_vf220(apOther->owner);
-	}
-}
-bool daEnPataTenten_c::collisionCatD_Drill(ActivePhysics *apThis, ActivePhysics *apOther) {
-	PlaySound(this, SE_EMY_DOWN);
-	SpawnEffect("Wm_mr_hardhit", 0, &pos, &(S16Vec){0, 0, 0}, &(Vec){1.0, 1.0, 1.0});
-	dEn_c::_vf148();
-	return true;
-}
-bool daEnPataTenten_c::collisionCat7_GroundPound(ActivePhysics *apThis, ActivePhysics *apOther) {
-	return this->collisionCatD_Drill(apThis, apOther);
-}
-bool daEnPataTenten_c::collisionCat7_GroundPoundYoshi(ActivePhysics *apThis, ActivePhysics *apOther) {
-	return this->collisionCatD_Drill(apThis, apOther);
-}
-bool daEnPataTenten_c::collisionCat9_RollingObject(ActivePhysics *apThis, ActivePhysics *apOther) {
-	return this->collisionCatD_Drill(apThis, apOther);
-}
-bool daEnPataTenten_c::collisionCatA_PenguinMario(ActivePhysics *apThis, ActivePhysics *apOther) {
-	return this->collisionCatD_Drill(apThis, apOther);
-}
-bool daEnPataTenten_c::collisionCat5_Mario(ActivePhysics *apThis, ActivePhysics *apOther) {
-	return this->collisionCatD_Drill(apThis, apOther);
-}
-bool daEnPataTenten_c::collisionCat11_PipeCannon(ActivePhysics *apThis, ActivePhysics *apOther) {
-	return this->collisionCatD_Drill(apThis, apOther);
-}
-bool daEnPataTenten_c::collisionCat13_Hammer(ActivePhysics *apThis, ActivePhysics *apOther) {
-	StageE4::instance->spawnCoinJump(pos, 0, 2, 0);
-	return this->collisionCatD_Drill(apThis, apOther);
-}
-
-bool daEnPataTenten_c::collisionCat3_StarPower(ActivePhysics *apThis, ActivePhysics *apOther) {
-	bool wut = dEn_c::collisionCat3_StarPower(apThis, apOther);
-	return wut;
-}
-
-bool daEnPataTenten_c::collisionCat14_YoshiFire(ActivePhysics *apThis, ActivePhysics *apOther) {
-	return this->collisionCat1_Fireball_E_Explosion(apThis, apOther);
-}
-
-bool daEnPataTenten_c::collisionCat1_Fireball_E_Explosion(ActivePhysics *apThis, ActivePhysics *apOther) {
-	StageE4::instance->spawnCoinJump(pos, 0, 1, 0);
-	return this->collisionCatD_Drill(apThis, apOther);
-}
-
-// void daEnPataTenten_c::collisionCat2_IceBall_15_YoshiIce(ActivePhysics *apThis, ActivePhysics *apOther) {
-	
-// 	dEn_C::collisionCat2_IceBall_15_YoshiIce(apThis, apOther);
-// }
-
-
-// These handle the ice crap
-void daEnPataTenten_c::_vf148() {
-	dEn_c::_vf148();
-}
-void daEnPataTenten_c::_vf14C() {
-	dEn_c::_vf14C();
-}
-
-extern "C" void sub_80024C20(void);
-extern "C" void __destroy_arr(void*, void(*)(void), int, int);
-//extern "C" __destroy_arr(struct DoSomethingCool, void(*)(void), int cnt, int bar);
-
-bool daEnPataTenten_c::CreateIceActors() {
-	struct DoSomethingCool my_struct = { 0, {this->pos.x, this->pos.y - 12.0, this->pos.z}, {1.7, 1.4, 2.0}, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
-	this->frzMgr.Create_ICEACTORs( (void*)&my_struct, 1 );
-	__destroy_arr( (void*)&my_struct, sub_80024C20, 0x3C, 1 );
-	this->animationChr.setUpdateRate(0.0f);
-	return true;
-}
-
-
-dActor_c* daEnPataTenten_c::build() {
-	void* buffer = AllocFromGameHeap1(sizeof(daEnPataTenten_c));
-	daEnPataTenten_c* c = new(buffer) daEnPataTenten_c;
-
-	return c;
-}
-
-
-void daEnPataTenten_c::bindAnimChr_and_setUpdateRate(const char* name, int unk, float unk2, float rate)
-{
-	nw4r::g3d::ResAnmChr anmChr = this->resFile.GetResAnmChr(name);
-	this->animationChr.bind(&this->model, anmChr, unk);
-	this->model.bindAnim(&this->animationChr, unk2);
-	this->animationChr.setUpdateRate(rate);
-}
-
-int daEnPataTenten_c::onCreate() {
-	if(!this->ranOnce) {
-		this->ranOnce = true;
-		return false;
-	}
-	this->sfxTimer = 0;
-
-	int color = (this->eventId1 & 0xF0) >> 4;
-    int groupId = (this->settings >> 24) & 0xFF;
-	
-	this->deleteForever = false; //makes the death state being used in preExecute
-
-	// Model creation
-	allocator.link(-1, GameHeaps[0], 0, 0x20);
-
-	char* resName = "";
-	sprintf(resName, "g3d/t%02d.brres", color);
-	resName[strlen(resName)] = 0;
-
-	this->resFile.data = getResource("tenten_wing", resName);
-	nw4r::g3d::ResMdl mdl = this->resFile.GetResMdl("tenten_wing");
-	model.setup(mdl, &allocator, 0x227, 1, 0);
-	SetupTextures_Enemy(&model, 0);
-
-	nw4r::g3d::ResAnmChr anmChr = this->resFile.GetResAnmChr("fly_wait");
-	this->animationChr.setup(mdl, anmChr, &this->allocator, 0);
-
-	this->anmPat = this->resFile.GetResAnmTexPat("tenten_wing");
-	this->animationPat.setup(mdl, anmPat, &this->allocator, 0, 1);
-	this->animationPat.bindEntry(&this->model, &anmPat, 0, 1);
-	this->animationPat.setFrameForEntry(((this->eventId1 & 0xF) % 5), 0);
-	this->animationPat.setUpdateRateForEntry(0.0f, 0);
-	this->model.bindAnim(&this->animationPat);
-
-	allocator.unlink();
-
-	ActivePhysics::Info HitMeBaby;
-
-	HitMeBaby.xDistToCenter = 0.0;
-	HitMeBaby.yDistToCenter = 0.0;
-
-	HitMeBaby.xDistToEdge = 10.0;
-	HitMeBaby.yDistToEdge = 8.0;
-
-	HitMeBaby.category1 = 0x3;
-	HitMeBaby.category2 = 0x0;
-	HitMeBaby.bitfield1 = 0x6F;
-	HitMeBaby.bitfield2 = 0xffbafffe;
-	HitMeBaby.unkShort1C = 0;
-	HitMeBaby.callback = &dEn_c::collisionCallback;
-
-	this->aPhysics.initWithStruct(this, &HitMeBaby);
-	this->aPhysics.addToList();
-
-
-	this->linearMovement = eventId2 >> 3 & 1;
-
-	this->upDown = eventId2 >> 2 & 1;
-	this->facingRightUp = eventId2 >> 1 & 1;
-	this->wDistance = (settings >> 20 & 0xF) * 8;
-	this->wSpeed = (settings >> 16 & 0xF) * 0.1;
-
-	this->scale = (Vec){0.15, 0.15, 0.15};
-
-	this->rot.x = 0;
-	if (facingRightUp && !upDown) this->rot.y = 0x2800;
-	else this->rot.y = 0xD800;
-	this->rot.z = 0;
-
-	if (this->upDown) {
-		this->edgeMin = this->pos.y - this->wDistance + 2;
-		this->edgeMax = this->pos.y + this->wDistance + 2;
-	}
-	else {
-		this->edgeMin = this->pos.x - this->wDistance;
-    	this->edgeMax = this->pos.x + this->wDistance;
-	}
-
-	bindAnimChr_and_setUpdateRate("fly_wait", 1, 0.0, 1.0);
-
-	if (this->linearMovement) {
-		if (this->wDistance == 0 || this->wSpeed == 0 || this->upDown) this->rot.y = 0;
-		doStateChange(&StateID_Wait);
-	}
-    else {
-		beginState_Init();
-		if (this->rotateNext) {
-			if (this->stepVector.x > 0) this->rot.y = 0x2800;
-			else this->rot.y = 0xD800;
-		}
-		else if (this->rotate0XNext) this->rot.y = 0x0;
-		executeState_Init();
-		doStateChange(&StateID_FollowPath);
-	}
-
-	this->onExecute();
-	return true;
-}
-
-
-int daEnPataTenten_c::onDelete() {
-	return true;
-}
-
-int daEnPataTenten_c::onDraw() {
-	model.scheduleForDrawing();
-	return true;
-}
-
-
-void daEnPataTenten_c::updateModelMatrices() {
-	matrix.translation(pos.x, pos.y - 8, pos.z);
-	matrix.applyRotationYXZ(&rot.x, &rot.y, &rot.z);
-
-	model.setDrawMatrix(matrix);
-	model.setScale(&scale);
-	model.calcWorld(false);
-}
-
-int daEnPataTenten_c::onExecute() {
-	acState.execute();
-	model._vf1C();
-	updateModelMatrices();
-
-	return true;
-}
-
-void daEnPataTenten_c::executePlaysound() {
-	this->sfxTimer++;
-
-	switch (this->sfxTimer) {
-		case 24:
-			this->playsound(SFX_TENTEN_STEP_L);
-			break;
-
-		case 54:
-			this->playsound(SFX_TENTEN_STEP_R);
-			break;
-	}
-
-	if (this->sfxTimer > 60) this->sfxTimer = 0;
-}
-
-void daEnPataTenten_c::playsound(int id) {
-	ClassWithCameraInfo *cwci = ClassWithCameraInfo::instance;
-	Vec2 dist = {
-		cwci->screenCenterX - this->pos.x,
-		cwci->screenCenterY - this->pos.y
-	};
-	float volume = max<float>(0.0, (1.0 - (sqrtf(dist.x * dist.x + dist.y * dist.y) / 500.0)) * 1.0);
-	if (volume <= 0.0) return;
-	else if (volume > 1.0) volume = 1.0;
-
-	PlaySoundWithFunctionB4(SoundRelatedClass, &this->handle, id, 1);
-	handle.SetVolume(volume, 1);
-}
-
-float daEnPataTenten_c::getValueOfCurve(float ratio, float curveRatioVar, float minValue) {
-    float curveRatio = 1.0 - curveRatioVar;
-
-    if (ratio < curveRatioVar) {
-        float r = ratio / curveRatioVar;
-        return sin(r * (M_PI / 2.0)) / (1.0 / minValue) + minValue;
-    }
-    else if (ratio < curveRatio) {
-        return 1.0;
-    }
-    else {
-        float r = (ratio - curveRatio) / curveRatioVar;
-        return (1 - sin(r * (M_PI / 2.0))) / (1.0 / minValue) + minValue;
-    }
-}
-
-///////////////
-// Wait State
-///////////////
-void daEnPataTenten_c::beginState_Wait() {
-    this->wSpeed = this->facingRightUp ? abs(this->wSpeed) : -abs(this->wSpeed);
-	this->animationChr.setUpdateRate(1.0f);
-}
-void daEnPataTenten_c::executeState_Wait() {
-	this->executePlaysound();
-	if (this->animationChr.getUpdateRate() == 0.0f) this->animationChr.setUpdateRate(1.0f);
-	else if (this->animationChr.isAnimationDone()) this->animationChr.setCurrentFrame(0.0);
-
-	if (this->wDistance == 0 || this->wSpeed == 0) return;
-
-    float dist = this->edgeMax - this->edgeMin;
-    float distRatio;
-    if (dist > 16.0) distRatio = 8.0 / dist;
-    else distRatio = 0.5;
-
-    float pos = (this->upDown ? this->pos.y : this->pos.x) - this->edgeMin;
-    float ratio = pos / dist;
-    float ratioCurve = this->getValueOfCurve(ratio, distRatio, 0.375);
-
-    float newSpeed = this->wSpeed * ratioCurve;
-    (this->upDown ? this->pos.y : this->pos.x) += newSpeed;
-
-    if (this->facingRightUp) {
-        if ((this->upDown ? this->pos.y : this->pos.x) > this->edgeMax) {
-            this->facingRightUp = false;
-            (this->upDown ? this->pos.y : this->pos.x) = this->edgeMax;
-            doStateChange(&StateID_Turn);
-        }
-    }
-    else {
-        if ((this->upDown ? this->pos.y : this->pos.x) < this->edgeMin) {
-            this->facingRightUp = true;
-            (this->upDown ? this->pos.y : this->pos.x) = this->edgeMin;
-            doStateChange(&StateID_Turn);
-        }
-    }
-
-	dEnPath_c::executeState_Wait();
-}
-void daEnPataTenten_c::endState_Wait() { }
-
-///////////////
-// Turn State
-///////////////
-void daEnPataTenten_c::beginState_Turn() {
-	this->animationChr.setUpdateRate(1.0f);
-}
-void daEnPataTenten_c::executeState_Turn() {
-	this->executePlaysound();
-    if (this->animationChr.getUpdateRate() == 0.0f) this->animationChr.setUpdateRate(1.0f);
-	else if (this->animationChr.isAnimationDone()) this->animationChr.setCurrentFrame(0.0);
-
-	if (this->upDown) {
-		doStateChange(&StateID_Wait);
-		return;
-	}
-
-    u16 amt = (this->facingRightUp == 1) ? 0x2800 : 0xD800;
-    int done = SmoothRotation(&this->rot.y, amt, 0x800);
-
-    if(done) {
-        doStateChange(&StateID_Wait);
-    }
-}
-void daEnPataTenten_c::endState_Turn() { }
-
-///////////////
-// Follow Path State
-///////////////
-void daEnPataTenten_c::beginState_FollowPath() {
-    this->amtRotate = this->rot.y;
-	this->animationChr.setUpdateRate(1.0f);
-}
-void daEnPataTenten_c::executeState_FollowPath() {
-	this->executePlaysound();
-	if (this->animationChr.getUpdateRate() == 0.0f) this->animationChr.setUpdateRate(1.0f);
-	else if (this->animationChr.isAnimationDone()) this->animationChr.setCurrentFrame(0.0);
-
-	if (this->stepsDone == this->stepCount) {
-        if (this->rotateNext) {
-            if (this->stepVector.x > 0) this->amtRotate = 0x2800;
-            else this->amtRotate = 0xD800;
-        }
-        else if (this->rotate0XNext) this->amtRotate = 0x0;
-    }
-
-    SmoothRotation(&this->rot.y, this->amtRotate, 0x200);
-	dEnPath_c::executeState_FollowPath();
-}
-void daEnPataTenten_c::endState_FollowPath() { }
-
-///////////////
-// Die by Stomp State
-///////////////
-void daEnPataTenten_c::beginState_DieStomp() {
-	this->removeMyActivePhysics();
-
-	bindAnimChr_and_setUpdateRate("damage", 1, 0.0, 1.0);
-	this->rot.y = 0;
-	this->rot.x = 0;
-}
-void daEnPataTenten_c::executeState_DieStomp() {
-	if(this->animationChr.isAnimationDone()) {
-		this->Delete(true);
-	}
-}
-void daEnPataTenten_c::endState_DieStomp() { }
-
-//
-// processed\../src/muncher.cpp
-//
-
-#include <common.h>
-#include <game.h>
-#include <g3dhax.h>
-#include <sfx.h>
-
-const char* MuncherArcNameList [] = {
-	"pakkun_black",
-	"ice",
-	NULL
-};
-
-class dMuncher_c : public dEn_c {
-	int onCreate();
-	int onDelete();
-	int onExecute();
-	int onDraw();
-
-	mHeapAllocator_c allocator;
-	nw4r::g3d::ResFile resFile;
-	m3d::mdl_c bodyModel;
-
-	m3d::anmChr_c chrAnimation;
-
-	mHeapAllocator_c iceAllocator;
-	nw4r::g3d::ResFile iceResFile;
-	m3d::mdl_c iceModel;
-	Vec iceScale;
-	float xIceScaleOffset, iceScaleMultiplier;
-
-	int timer;
-	int maxTimer;
-	float XSpeed;
-	u32 cmgr_returnValue;
-	bool isBouncing;
-
-	int color, rotation;
-	bool isFrozen, wideCollision, isFreezable, isBig, disableGravity, disableAnimSync;
-	s16 colRot;
-
-	Vec effectOffset;
-	Vec effectScale;
-
-	Physics::Info physicsInfo;
-	float topPhysicsPos, frozenTopPhysicsPos;
-	Physics physics;
-
-	static dMuncher_c *build();
-
-	void bindAnimChr_and_setUpdateRate(const char* name, int unk, float unk2, float rate);
-	void updateModelMatrices();
-	bool calculateTileCollisions();
-
-	USING_STATES(dMuncher_c);
-	DECLARE_STATE(Wait);
-	DECLARE_STATE(Frozen);
-	DECLARE_STATE(Freeze);
-	DECLARE_STATE(Unfreeze);
-
-	public:
-		bool normalActorCollision(dMuncher_c *saThis, dStageActor_c *saOther);
-		bool isCurrentlyFrozen();
-};
-
-dMuncher_c *dMuncher_c::build() {
-	void *buffer = AllocFromGameHeap1(sizeof(dMuncher_c));
-	return new(buffer) dMuncher_c;
-}
-
-///////////////////////
-// Externs and States
-///////////////////////
-	// extern "C" void *EN_LandbarrelPlayerCollision(dEn_c* t, ActivePhysics *apThis, ActivePhysics *apOther);
-
-	//FIXME make this dEn_c->used...
-	extern "C" char usedForDeterminingStatePress_or_playerCollision(dEn_c* t, ActivePhysics *apThis, ActivePhysics *apOther, int unk1);
-	// extern "C" int SmoothRotation(short* rot, u16 amt, int unk2);
-
-
-	CREATE_STATE(dMuncher_c, Wait);
-	CREATE_STATE(dMuncher_c, Frozen);
-	CREATE_STATE(dMuncher_c, Freeze);
-	CREATE_STATE(dMuncher_c, Unfreeze);
-
-
-////////////////////////
-// Collision Functions
-////////////////////////
-
-
-bool dMuncher_c::calculateTileCollisions() {
-	// Returns true if sprite should turn, false if not.
-
-	HandleXSpeed();
-	HandleYSpeed();
-	doSpriteMovement();
-
-
-	cmgr_returnValue = collMgr.isOnTopOfTile();
-	collMgr.calculateBelowCollisionWithSmokeEffect();
-
-	if (isBouncing) {
-		stuffRelatingToCollisions(0.1875f, 1.0f, 0.5f);
-		if (speed.y != 0.0f)
-			isBouncing = false;
-	}
-
-	if (collMgr.isOnTopOfTile()) {
-		// Walking into a tile branch
-
-		if (cmgr_returnValue == 0)
-			isBouncing = true;
-
-		if (speed.x != 0.0f) {
-			//playWmEnIronEffect();
-		}
-
-		speed.y = 0.0f;
-	} else {
-		x_speed_inc = 0.0f;
-	}
-
-	// Bouncing checks
-	if (_34A & 4) {
-		Vec v = (Vec){0.0f, 1.0f, 0.0f};
-		collMgr.pSpeed = &v;
-
-		if (collMgr.calculateAboveCollision(collMgr.outputMaybe))
-			speed.y = 0.0f;
-
-		collMgr.pSpeed = &speed;
-
-	} else {
-		if (collMgr.calculateAboveCollision(collMgr.outputMaybe))
-			speed.y = 0.0f;
-	}
-
-	collMgr.calculateAdjacentCollision(0);
-
-	// Switch Direction
-	if (collMgr.outputMaybe & (0x15 << direction)) {
-		if (collMgr.isOnTopOfTile()) {
-			isBouncing = true;
-		}
-		return true;
-	}
-	return false;
-}
-
-
-bool dMuncher_c::normalActorCollision(dMuncher_c *saThis, dStageActor_c *saOther) {
-	if (saOther->stageActorType != 0) return false;
-
-	switch (saOther->name) {
-		case PL_FIREBALL:
-		case BROS_FIREBALL:
-		case PAKKUN_FIREBALL:
-		case EN_FIREBAR:
-		case EN_FIRESNAKE:
-		case FIRE_BLITZ:
-		case JR_FIRE:
-		case KOOPA_FIRE:
-			if (this->isFrozen) doStateChange(&StateID_Unfreeze);
-			return true;
-
-		case ICEBALL:
-		case BROS_ICEBALL:
-			if (this->isFreezable && !this->isFrozen) {
-				doStateChange(&StateID_Freeze);
-				saOther->Delete(1);
-			}
-			return true;
-	}
-
-	return false;
-}
-
-bool dMuncher_c::isCurrentlyFrozen() {
-	return this->isFrozen;
-}
-
-
-/*****************************************************************************/
-// Glue Code
-extern "C" void HurtMarioBecauseOfBeingSquashed(void *mario, dStageActor_c *squasher, int type);
-
-static void MuncherPhysCB1(dMuncher_c *one, dStageActor_c *two) { // Mario/Yoshi on top / Muncher on bottom
-	if (one->normalActorCollision(one, two)) return;
-
-	if (two->stageActorType != 1 && two->stageActorType != 2)
-		return;
-
-	if (one->pos_delta.y > 0.0f)
-		HurtMarioBecauseOfBeingSquashed(two, one, 1);
-
-	else if (one->pos_delta.y < 0.0f)
-		HurtMarioBecauseOfBeingSquashed(two, one, 9);
-
-	if (two->stageActorType == 1) { // Mario
-		if (!one->isCurrentlyFrozen()) one->_vf220(two);
-	}
-}
-
-static void MuncherPhysCB2(dMuncher_c *one, dStageActor_c *two) { // Mario/Yoshi on bottom / Muncher on top
-	if (one->normalActorCollision(one, two)) return;
-
-	if (two->stageActorType != 1 && two->stageActorType != 2)
-		return;
-
-	if (one->pos_delta.y < 0.0f)
-		HurtMarioBecauseOfBeingSquashed(two, one, 2);
-
-	else if (one->pos_delta.y > 0.0f)
-		HurtMarioBecauseOfBeingSquashed(two, one, 10);
-
-	if (!one->isCurrentlyFrozen()) one->_vf220(two);
-}
-
-static void MuncherPhysCB3(dMuncher_c *one, dStageActor_c *two, bool unkMaybeNotBool) { // Mario/Yoshi on side
-	if (one->normalActorCollision(one, two)) return;
-
-	if (two->stageActorType != 1 && two->stageActorType != 2)
-		return;
-
-	if (!one->isCurrentlyFrozen()) one->_vf220(two);
-}
-
-static bool MuncherPhysCB4(dMuncher_c *one, dStageActor_c *two) {
-	return true;
-}
-
-static bool MuncherPhysCB5(dMuncher_c *one, dStageActor_c *two) {
-	return true;
-}
-
-static bool MuncherPhysCB6(dMuncher_c *one, dStageActor_c *two, bool unkMaybeNotBool) {
-	return true;
-}
-
-
-void dMuncher_c::bindAnimChr_and_setUpdateRate(const char* name, int unk, float unk2, float rate) {
-	nw4r::g3d::ResAnmChr anmChr = this->resFile.GetResAnmChr(name);
-	this->chrAnimation.bind(&this->bodyModel, anmChr, unk);
-	this->bodyModel.bindAnim(&this->chrAnimation, unk2);
-	this->chrAnimation.setUpdateRate(rate);
-}
-
-int dMuncher_c::onCreate() {
-
-	this->deleteForever = true;
-
-	this->color = this->settings >> 28 & 0xF;
-
-	int nybble5 = this->settings >> 24 & 0xF;
-	this->isBig = nybble5 & 0b1000;
-	this->wideCollision = nybble5 & 0b100;
-	this->disableAnimSync = nybble5 & 0b10;
-	this->disableGravity = nybble5 & 0b1;
-
-	int nybble8 = this->settings >> 16 & 0xF;
-	bool moveSlightlyHorizontally = nybble8 & 0b1000;
-	bool moveSlightlyUp = nybble8 & 0b100;
-	this->isFreezable = nybble8 & 0b10;
-	this->isFrozen = nybble8 & 0b1;
-
-	this->rotation = this->settings & 0xFFFF;
-
-	// Model creation
-	allocator.link(-1, GameHeaps[0], 0, 0x20);
-
-	char* resName = "";
-	sprintf(resName, "g3d/t%02d.brres", this->color);
-	resName[strlen(resName)] = 0;
-	resFile.data = getResource("pakkun_black", resName);
-	nw4r::g3d::ResMdl mdl = this->resFile.GetResMdl("pakkun_black");
-	bodyModel.setup(mdl, &allocator, 0, 1, 0);
-	SetupTextures_Enemy(&bodyModel, 0);
-
-
-	// Animations start here
-	nw4r::g3d::ResAnmChr anmChr = this->resFile.GetResAnmChr("attack");
-	this->chrAnimation.setup(mdl, anmChr, &this->allocator, 0);
-
-	allocator.unlink();
-
-
-	// Ice Model creation
-	iceAllocator.link(-1, GameHeaps[0], 0, 0x20);
-
-	iceResFile.data = getResource("ice", "g3d/ice.brres");
-	nw4r::g3d::ResMdl icemdl = this->iceResFile.GetResMdl("ice_A1");
-	iceModel.setup(icemdl, &iceAllocator, 0, 1, 0);
-	SetupTextures_MapObj(&iceModel, 0);
-
-	iceAllocator.unlink();
-
-
-	// Stuff I do understand
-	this->scale = (Vec){1.0, 1.0, 1.0};
-	if (this->isBig) this->scale = (Vec){2.0, 2.0, 2.0};
-	this->iceScaleMultiplier = 0.89;
-	this->iceScale = (Vec){this->iceScaleMultiplier * this->scale.x, this->iceScaleMultiplier * this->scale.y, this->iceScaleMultiplier * this->scale.z};
-
-	// rotation / 0xF * 0xFFFF == rotation * 0x1111
-	// BUT 0x1111 doesn't work with some high values for some reason so I'm using 0xFFF
-	this->rot.x = (float)(this->rotation); // X is vertical axis (0xFFF ~= 22.5 degrees)
-	this->rot.y = 0x3FFF; // Y is horizontal axis
-	this->rot.z = 0; // Z is ... an axis >.>
-	this->direction = 1; // Heading left.
-	
-	this->speed.x = 0.0;
-	this->speed.y = 0.0;
-	this->max_speed.x = 0.8;
-	this->x_speed_inc = 0.0;
-	this->XSpeed = 0.8;
-
-	Vec2 rotationBalance;
-	float angle = ((this->rotation / (float)(0xFFFF)) * 360.0) - 90.0;
-	if (angle < 0.0) angle += 360.0;
-	rotationBalance.x = cos(angle * M_PI / 180.0);
-	rotationBalance.y = sin(angle * M_PI / 180.0);
-
-	float colBalance = 0.0;
-	if (this->wideCollision) colBalance = (1.0 - (abs(rotationBalance.x) + abs(rotationBalance.y) - 1.0)) / 2.0; // Because yoshi falls between two munchers when there is an angle
-
-	this->physicsInfo.x1 = (-8 * this->scale.x) - colBalance;
-	this->physicsInfo.y1 = 16.0 * 0.89 * this->scale.y; // 0.89 is the scale of the default frozen muncher
-	this->physicsInfo.x2 = (8 * this->scale.x) + colBalance;
-	this->physicsInfo.y2 = 0.0;
-
-	this->topPhysicsPos = this->physicsInfo.y1;
-	this->frozenTopPhysicsPos = 16.0 * 1.09 * this->scale.y; // 1.09 bc you still take damage with 1.0
-
-	this->xIceScaleOffset = colBalance / 2.0;
-	this->iceScale.x += this->xIceScaleOffset;
-
-	this->physicsInfo.otherCallback1 = &MuncherPhysCB1;
-	this->physicsInfo.otherCallback2 = &MuncherPhysCB2;
-	this->physicsInfo.otherCallback3 = &MuncherPhysCB3;
-
-	physics.setup(this, &this->physicsInfo, 3, currentLayerID);
-	physics.flagsMaybe = 0x260;
-	physics.callback1 = &MuncherPhysCB4;
-	physics.callback2 = &MuncherPhysCB5;
-	physics.callback3 = &MuncherPhysCB6;
-	this->colRot = -this->rot.x;
-	physics.setPtrToRotation(&this->colRot);
-
-	physics.addToList();
-
-	if (moveSlightlyHorizontally) this->pos.x -= ((rotationBalance.x + 1.0) / 2.0) * 2.0;
-	this->pos.y += 8.0;
-
-	if (moveSlightlyUp) this->pos.y += 4.0;
-
-	this->effectOffset.x = rotationBalance.x * 8.0;
-	this->effectOffset.y = rotationBalance.y * -8.0;
-	this->effectOffset.z = 0.0;
-
-	this->effectScale = (Vec){.5 * this->scale.x, .5 * this->scale.x, .5 * this->scale.x};
-
-
-	// Tile collider
-
-	// These fucking rects do something for the tile rect
-	spriteSomeRectX = 28.0f;
-	spriteSomeRectY = 32.0f;
-	_320 = 0.0f;
-	_324 = 16.0f;
-
-	static const pointSensor_s below(0<<12, 0<<12);
-	static const pointSensor_s above(0<<12, 12<<12);
-	static const lineSensor_s adjacent(6<<12, 9<<12, 8<<12);
-
-	collMgr.init(this, &below, &above, &adjacent);
-	collMgr.calculateBelowCollisionWithSmokeEffect();
-
-	cmgr_returnValue = collMgr.isOnTopOfTile();
-
-	if (collMgr.isOnTopOfTile())
-		isBouncing = false;
-	else
-		isBouncing = true;
-
-
-	// State Changers
-	bindAnimChr_and_setUpdateRate("attack", 1, 0.0, 1.0);
-	if (this->isFrozen) this->doStateChange(&StateID_Frozen);
-	else this->doStateChange(&StateID_Wait);
-
-	this->onExecute();
-	return true;
-}
-
-int dMuncher_c::onDelete() {
-	return true;
-}
-
-int dMuncher_c::onExecute() {
-	acState.execute();
-	physics.update();
-	updateModelMatrices();
-
-	return true;
-}
-
-int dMuncher_c::onDraw() {
-	bodyModel.scheduleForDrawing();
-	if (this->isFrozen) iceModel.scheduleForDrawing();
-
-	return true;
-}
-
-void dMuncher_c::updateModelMatrices() {
-	matrix.translation(pos.x, pos.y, pos.z);
-	matrix.applyRotationYXZ(&rot.x, &rot.y, &rot.z);
-
-	bodyModel.setDrawMatrix(matrix);
-	bodyModel.setScale(&scale);
-	bodyModel.calcWorld(false);
-
-	if (this->isFrozen) {
-		iceModel.setDrawMatrix(matrix);
-		iceModel.setScale(&iceScale);
-		iceModel.calcWorld(false);
-	}
-}
-
-
-///////////////
-// Wait State
-///////////////
-void dMuncher_c::beginState_Wait() {
-	this->max_speed.x = 0;
-	this->speed.x = 0;
-
-	if (this->disableGravity) {
-		this->max_speed.y = 0.0;
-		this->speed.y = 0.0;
-		this->y_speed_inc = 0.0;
-	} else {
-		this->max_speed.y = -4.0;
-		this->speed.y = -4.0;
-		this->y_speed_inc = -0.1875;
-	}
-
-	this->chrAnimation.setUpdateRate(1.0);
-	if (!this->disableAnimSync) {
-		float frame = dScStage_c::exeFrame % int(this->chrAnimation.numFrames);
-    	this->chrAnimation.setCurrentFrame(frame);
-	}
-
-	this->isFrozen = false;
-	this->physics.flagsMaybe = 0x260;
-	this->physicsInfo.y1 = this->topPhysicsPos;
-	this->physics.setup(this, &this->physicsInfo, 3, currentLayerID);
-	physics.setPtrToRotation(&this->colRot);
-}
-void dMuncher_c::executeState_Wait() {
-	if (!this->disableGravity) bool ret = calculateTileCollisions();
-
-	bodyModel._vf1C();
-
-	if(this->chrAnimation.isAnimationDone()) {
-		this->chrAnimation.setCurrentFrame(0.0);
-	}
-}
-void dMuncher_c::endState_Wait() { }
-
-
-///////////////
-// Frozen State
-///////////////
-void dMuncher_c::beginState_Frozen() {
-	this->max_speed.x = 0;
-	this->speed.x = 0;
-
-	this->max_speed.y = 0.0;
-	this->speed.y = 0.0;
-	this->y_speed_inc = 0.0;
-
-	this->chrAnimation.setUpdateRate(0.0); // Just in case it changes state too fast
-
-	this->isFrozen = true;
-	this->physics.flagsMaybe = 0x268;
-	this->physicsInfo.y1 = this->frozenTopPhysicsPos;
-	this->physics.setup(this, &this->physicsInfo, 3, currentLayerID);
-	physics.setPtrToRotation(&this->colRot);
-
-	this->iceScale = (Vec){this->iceScaleMultiplier * this->scale.x + this->xIceScaleOffset, this->iceScaleMultiplier * this->scale.y, this->iceScaleMultiplier * this->scale.z};
-}
-void dMuncher_c::executeState_Frozen() {
-	bodyModel._vf1C();
-}
-void dMuncher_c::endState_Frozen() {
-	// this->isFrozen = false;
-	// this->physics.flagsMaybe = 0x260;
-}
-
-
-///////////////
-// Freeze State
-///////////////
-void dMuncher_c::beginState_Freeze() {
-	this->max_speed.x = 0;
-	this->speed.x = 0;
-
-	this->max_speed.y = 0.0;
-	this->speed.y = 0.0;
-	this->y_speed_inc = 0.0;
-
-	this->chrAnimation.setUpdateRate(0.0);
-
-	this->isFrozen = true;
-	this->physics.flagsMaybe = 0x268;
-	this->physicsInfo.y1 = this->frozenTopPhysicsPos;
-	this->physics.setup(this, &this->physicsInfo, 3, currentLayerID);
-	physics.setPtrToRotation(&this->colRot);
-
-	this->iceScale = (Vec){0, 0, 0};
-	this->timer = 0;
-	this->maxTimer = 6;
-
-	S16Vec nullRot = {0,0,0};
-	Vec oneVec = {1.0f, 1.0f, 1.0f};
-	Vec effPos = {this->pos.x + this->effectOffset.x, this->pos.y + this->effectOffset.y, this->pos.z + this->effectOffset.z};
-	SpawnEffect("Wm_ob_iceattack", 0, &effPos, &nullRot, &oneVec);
-	SpawnEffect("Wm_ob_iceattackkira", 0, &effPos, &nullRot, &oneVec);
-	SpawnEffect("Wm_ob_iceattackline", 0, &effPos, &nullRot, &oneVec);
-	SpawnEffect("Wm_ob_iceattacksmk", 0, &effPos, &nullRot, &oneVec);
-
-	PlaySoundAsync(this, SE_OBJ_PNGN_ICE_FREEZE);
-}
-void dMuncher_c::executeState_Freeze() {
-	this->timer++;
-
-	float scale = this->iceScaleMultiplier * ((float)this->timer / (float)this->maxTimer) * this->scale.x;
-	this->iceScale = (Vec){scale + this->xIceScaleOffset, scale, scale};
-
-	if (this->timer >= this->maxTimer) this->doStateChange(&StateID_Frozen);
-
-	bodyModel._vf1C();
-}
-void dMuncher_c::endState_Freeze() {}
-
-
-///////////////
-// Unfreeze State
-///////////////
-void dMuncher_c::beginState_Unfreeze() {
-	this->max_speed.x = 0;
-	this->speed.x = 0;
-
-	this->max_speed.y = 0.0;
-	this->speed.y = 0.0;
-	this->y_speed_inc = 0.0;
-
-	this->chrAnimation.setUpdateRate(0.0); // Just in case it changes state too fast
-
-	this->isFrozen = true;
-	this->physics.flagsMaybe = 0x268;
-	this->physicsInfo.y1 = this->frozenTopPhysicsPos;
-	this->physics.setup(this, &this->physicsInfo, 3, currentLayerID);
-	physics.setPtrToRotation(&this->colRot);
-
-	this->iceScale = (Vec){this->iceScaleMultiplier * this->scale.x + this->xIceScaleOffset, this->iceScaleMultiplier * this->scale.y, this->iceScaleMultiplier * this->scale.z};
-	this->timer = 30;
-	this->maxTimer = this->timer;
-
-	S16Vec nullRot = {0,0,0};
-	Vec oneVec = {1.0f, 1.0f, 1.0f};
-	Vec effPos = {this->pos.x + this->effectOffset.x, this->pos.y + this->effectOffset.y, this->pos.z + this->effectOffset.z};
-	SpawnEffect("Wm_ob_iceevaporate", 0, &effPos, &nullRot, &oneVec);
-	PlaySoundAsync(this, SE_EMY_FIRE_SNAKE_EXTINCT);
-}
-void dMuncher_c::executeState_Unfreeze() {
-	this->timer--;
-
-	float scale = this->iceScaleMultiplier * ((float)this->timer / (float)this->maxTimer) * this->scale.x;
-	this->iceScale = (Vec){scale + this->xIceScaleOffset, scale, scale};
-
-	if (this->timer <= 0) this->doStateChange(&StateID_Wait);
-
-	bodyModel._vf1C();
-}
-void dMuncher_c::endState_Unfreeze() {
-	this->isFrozen = false;
-	this->physics.flagsMaybe = 0x260;
-	this->physicsInfo.y1 = this->topPhysicsPos;
-	this->physics.setup(this, &this->physicsInfo, 3, currentLayerID);
-	physics.setPtrToRotation(&this->colRot);
-}
-
-
-//
 // processed\../src/creditsMgr.cpp
 //
 
@@ -4895,304 +2034,6 @@ void daEnChestnut_c::spawnObject() {
 }
 
 //
-// processed\../src/flipblock.cpp
-//
-
-#include <common.h>
-#include <game.h>
-#include <profile.h>
-#include <sfx.h>
-
-const char *FlipBlockFileList[] = {"block_round", 0};
-const int FlipBlockFlipCount = 16;
-const int FlipBlockFlipFrameCount = 4;
-const int FlipBlockFlipMinFrameCount = 4;
-
-class daEnFlipBlock_c : public daEnBlockMain_c {
-public:
-	Physics::Info physicsInfo;
-
-	int onCreate();
-	int onDelete();
-	int onExecute();
-	int onDraw();
-
-	void calledWhenUpMoveExecutes();
-	void calledWhenDownMoveExecutes();
-
-	void blockWasHit(bool isDown);
-	void resetTimer();
-	void playsound();
-
-	bool playerOverlaps();
-
-	mHeapAllocator_c allocator;
-	nw4r::g3d::ResFile resFile;
-	m3d::mdl_c leftModel, middleModel, eyesModel, rightModel;
-
-	int width, flipsRemaining, timer, maxTimer, sideOffset;
-	float middleXScale;
-	nw4r::snd::SoundHandle handle; // Sound Handle
-
-	USING_STATES(daEnFlipBlock_c);
-	DECLARE_STATE(Wait);
-	DECLARE_STATE(Flipping);
-
-	static dActor_c *build();
-};
-
-dActor_c *daEnFlipBlock_c::build() {
-
-	void *buffer = AllocFromGameHeap1(sizeof(daEnFlipBlock_c));
-	daEnFlipBlock_c *c = new(buffer) daEnFlipBlock_c;
-
-
-	return c;
-}
-
-const SpriteData FlipBlockSpriteData = { ProfileId::FlipBlock, 8, -8, 0, 0, 0x100, 0x100, 0, 0, 0, 0, 0 };
-Profile FlipBlockProfile(&daEnFlipBlock_c::build, SpriteId::FlipBlock, &FlipBlockSpriteData, ProfileId::FlipBlock, ProfileId::FlipBlock, "FlipBlock", FlipBlockFileList, 0);
-
-
-CREATE_STATE(daEnFlipBlock_c, Wait);
-CREATE_STATE(daEnFlipBlock_c, Flipping);
-
-
-int daEnFlipBlock_c::onCreate() {
-	int color = this->settings >> 24 & 0xF;
-	width = this->settings >> 28 & 0xF;
-
-	allocator.link(-1, GameHeaps[0], 0, 0x20);
-
-	char resName[16];
-	getSpriteTexResName(resName, color);
-	this->resFile.data = getResource("block_round", resName);
-
-	nw4r::g3d::ResMdl leftMdl = this->resFile.GetResMdl("left");
-	leftModel.setup(leftMdl, &allocator, 0x224, 1, 0);
-	SetupTextures_MapObj(&leftModel, 0);
-
-	nw4r::g3d::ResMdl middleMdl = this->resFile.GetResMdl("middle");
-	middleModel.setup(middleMdl, &allocator, 0x224, 1, 0);
-	SetupTextures_MapObj(&middleModel, 0);
-
-	nw4r::g3d::ResMdl eyesMdl = this->resFile.GetResMdl("eyes");
-	eyesModel.setup(eyesMdl, &allocator, 0x224, 1, 0);
-	SetupTextures_MapObj(&eyesModel, 0);
-
-	nw4r::g3d::ResMdl rightMdl = this->resFile.GetResMdl("right");
-	rightModel.setup(rightMdl, &allocator, 0x224, 1, 0);
-	SetupTextures_MapObj(&rightModel, 0);
-
-	allocator.unlink();
-
-
-	middleXScale = (1.0 + (width * 1.25)) * scale.x;
-	sideOffset = width * 8;
-
-
-	blockInit(pos.y);
-
-	physicsInfo.x1 = -8 - sideOffset;
-	physicsInfo.y1 = 8;
-	physicsInfo.x2 = 8 + sideOffset;
-	physicsInfo.y2 = -8;
-
-	physicsInfo.belowSensorCallback = &daEnBlockMain_c::OPhysicsCallback1;
-	physicsInfo.aboveSensorCallback = &daEnBlockMain_c::OPhysicsCallback2;
-	physicsInfo.adjacentSensorCallback = &daEnBlockMain_c::OPhysicsCallback3;
-
-	physics.setup(this, &physicsInfo, 3, currentLayerID);
-	physics.flagsMaybe = 0x260;
-	physics.callback1 = &daEnBlockMain_c::PhysicsCallback1;
-	physics.callback2 = &daEnBlockMain_c::PhysicsCallback2;
-	physics.callback3 = &daEnBlockMain_c::PhysicsCallback3;
-	physics.addToList();
-
-	doStateChange(&daEnFlipBlock_c::StateID_Wait);
-
-	return true;
-}
-
-
-int daEnFlipBlock_c::onDelete() {
-	physics.removeFromList();
-
-	return true;
-}
-
-
-int daEnFlipBlock_c::onExecute() {
-	acState.execute();
-	physics.update();
-	blockUpdate();
-
-	// now check zone bounds based on state
-	if (acState.getCurrentState()->isEqual(&StateID_Wait)) {
-		checkZoneBoundaries(0);
-	}
-
-	return true;
-}
-
-
-int daEnFlipBlock_c::onDraw() {
-	mMtx leftMatrix;
-	leftMatrix.translation(pos.x - sideOffset, pos.y, pos.z);
-	leftMatrix.applyRotationYXZ(&rot.x, &rot.y, &rot.z);
-
-	leftModel.setDrawMatrix(leftMatrix);
-	leftModel.setScale(&scale);
-	leftModel.calcWorld(false);
-	leftModel.scheduleForDrawing();
-
-	matrix.translation(pos.x, pos.y, pos.z);
-	matrix.applyRotationYXZ(&rot.x, &rot.y, &rot.z);
-	Vec middleScale = {middleXScale, scale.y, scale.z};
-
-	middleModel.setDrawMatrix(matrix);
-	middleModel.setScale(&middleScale);
-	middleModel.calcWorld(false);
-	middleModel.scheduleForDrawing();
-
-	eyesModel.setDrawMatrix(matrix);
-	eyesModel.setScale(&scale);
-	eyesModel.calcWorld(false);
-	eyesModel.scheduleForDrawing();
-
-	mMtx rightMatrix;
-	rightMatrix.translation(pos.x + sideOffset, pos.y, pos.z);
-	rightMatrix.applyRotationYXZ(&rot.x, &rot.y, &rot.z);
-
-	rightModel.setDrawMatrix(rightMatrix);
-	rightModel.setScale(&scale);
-	rightModel.calcWorld(false);
-	rightModel.scheduleForDrawing();
-
-	return true;
-}
-
-
-void daEnFlipBlock_c::blockWasHit(bool isDown) {
-	pos.y = initialY;
-
-	doStateChange(&StateID_Flipping);
-}
-
-
-
-void daEnFlipBlock_c::calledWhenUpMoveExecutes() {
-	if (initialY >= pos.y)
-		blockWasHit(false);
-}
-
-void daEnFlipBlock_c::calledWhenDownMoveExecutes() {
-	if (initialY <= pos.y)
-		blockWasHit(true);
-}
-
-
-
-void daEnFlipBlock_c::beginState_Wait() {
-}
-
-void daEnFlipBlock_c::endState_Wait() {
-}
-
-void daEnFlipBlock_c::executeState_Wait() {
-	int result = blockResult();
-
-	if (result == 0)
-		return;
-
-	if (result == 1) {
-		// doStateChange(&daEnBlockMain_c::StateID_UpMove);
-		anotherFlag = 2;
-		isGroundPound = false;
-		doStateChange(&StateID_Flipping);
-	} else {
-		// doStateChange(&daEnBlockMain_c::StateID_DownMove);
-		anotherFlag = 1;
-		isGroundPound = true;
-		doStateChange(&StateID_Flipping);
-	}
-}
-
-
-
-void daEnFlipBlock_c::resetTimer() {
-	timer = 0;
-	maxTimer = max<int>(((FlipBlockFlipCount + 1) - flipsRemaining) * (FlipBlockFlipFrameCount / 2.0), FlipBlockFlipMinFrameCount);
-}
-
-void daEnFlipBlock_c::playsound() {
-	float ratio = flipsRemaining / (float)FlipBlockFlipCount;
-	playSoundDistance(&this->handle, this->pos, SFX_BLOCK_ROUND_SWAY, 0.5 + (ratio / 2.0), 1.0 + (ratio / 2.0));
-}
-
-void daEnFlipBlock_c::beginState_Flipping() {
-	flipsRemaining = FlipBlockFlipCount;
-	resetTimer();
-	playsound();
-	physics.removeFromList();
-}
-void daEnFlipBlock_c::executeState_Flipping() {
-	timer++;
-	float value = timer / (maxTimer * 2.0);
-	if (value > 0.5) value -= 0.5;
-	float amount = (sin(value * 2.0 * M_PI - (M_PI / 2.0)) + 1) * 0.5;
-
-	if (isGroundPound)
-		rot.x = amount * (0x8000);
-	else
-		rot.x = (amount * -1.0) * (0x8000);
-
-	if (timer >= maxTimer) {
-		flipsRemaining--;
-		resetTimer();
-		if (flipsRemaining <= 0) {
-			flipsRemaining = 0;
-			if (!playerOverlaps()) doStateChange(&StateID_Wait);
-			else playsound();
-		}
-		else playsound();
-	}
-}
-void daEnFlipBlock_c::endState_Flipping() {
-	physics.setup(this, &physicsInfo, 3, currentLayerID);
-	physics.addToList();
-}
-
-
-
-bool daEnFlipBlock_c::playerOverlaps() {
-	dStageActor_c *player = 0;
-
-	Vec myBL = {pos.x - 8.0f, pos.y - 8.0f, 0.0f};
-	Vec myTR = {pos.x + 8.0f, pos.y + 8.0f, 0.0f};
-
-	while ((player = (dStageActor_c*)fBase_c::search(PLAYER, player)) != 0) {
-		float centerX = player->pos.x + player->aPhysics.info.xDistToCenter;
-		float centerY = player->pos.y + player->aPhysics.info.yDistToCenter;
-
-		float left = centerX - player->aPhysics.info.xDistToEdge;
-		float right = centerX + player->aPhysics.info.xDistToEdge;
-
-		float top = centerY + player->aPhysics.info.yDistToEdge;
-		float bottom = centerY - player->aPhysics.info.yDistToEdge;
-
-		Vec playerBL = {left, bottom + 0.1f, 0.0f};
-		Vec playerTR = {right, top - 0.1f, 0.0f};
-
-		if (RectanglesOverlap(&playerBL, &playerTR, &myBL, &myTR))
-			return true;
-	}
-
-	return false;
-}
-
-
-//
 // processed\../src/magicplatform.cpp
 //
 
@@ -6407,9 +3248,21 @@ extern "C" u8 after_course_getMusicForZone(u8 realThemeID) {
 
 const char* SFXNameList [] = {
 	"original",				// 1999, DON'T USE THIS ONE
-	// add more sfx here	// 2000
+	"meragon_fire_start",		// 2000
+	"meragon_fire",				// 2001
+	"meragon_wing",				// 2002
+	"tenten_step_l",      // 2003
+	"tenten_step_r",      // 2004
+	"block_round_sway",      // 2005
 	NULL
 };
+
+#define SFX_MERAGON_FIRE_START 2000
+#define SFX_MERAGON_FIRE 2001
+#define SFX_MERAGON_WING 2002
+#define SFX_TENTEN_STEP_L 2003
+#define SFX_TENTEN_STEP_R 2004
+#define SFX_BLOCK_ROUND_SWAY 2005
 
 int currentSFX = -1;
 u32 *currentPtr = 0;
@@ -7067,7 +3920,6 @@ CREATE_STATE_E(dScKoopatlas_c, EasyPairingWait);
 CREATE_STATE_E(dScKoopatlas_c, PowerupsWait);
 CREATE_STATE_E(dScKoopatlas_c, ShopWait);
 CREATE_STATE_E(dScKoopatlas_c, CoinsWait);
-CREATE_STATE_E(dScKoopatlas_c, WMViewerWait);
 CREATE_STATE_E(dScKoopatlas_c, SaveOpen);
 CREATE_STATE_E(dScKoopatlas_c, SaveSelect);
 CREATE_STATE_E(dScKoopatlas_c, SaveWindowClose);
@@ -7230,7 +4082,7 @@ bool WMInit_LoadResources2(void *ptr) {
 		OSReport("Load map: %s\n", wm->mapPath);
 	}
 
-	if (wm->mapData.load(wm->mapPath) && wm->borderData.load("NewerRes/MapBorders.bin")) {
+	if (wm->mapData.load(wm->mapPath)) {
 		return true;
 	} else
 		return false;
@@ -7485,12 +4337,6 @@ int dScKoopatlas_c::onCreate() {
 
 	somethingAboutSound(_8042A788);
 
-	sfxIsPlaying = false;
-	sfxShouldPlay = false;
-	WMViewerVisible = false;
-
-	coordinatesSet = false;
-
 	return true;
 }
 
@@ -7586,36 +4432,6 @@ void dScKoopatlas_c::endState_ContinueWait() {
 
 
 void dScKoopatlas_c::executeState_Normal() {
-
-	if (!coordinatesSet)
-	{
-		SaveBlock *save = GetSaveFile()->GetBlock(-1);
-		int size = 0;
-		size = borderData.data->numOfWorlds;
-		float* left = new float[size];
-		float* right = new float[size];
-		float* top = new float[size];
-		float* bottom = new float[size];
-		for (int i = 0; i < borderData.data->numOfWorlds; i++)
-		{
-			left[i] = borderData.data->world[i].xLeft;
-			right[i] = borderData.data->world[i].xRight;
-			top[i] = -borderData.data->world[i].yTop;
-			bottom[i] = -borderData.data->world[i].yBottom;
-		}
-		WMBorder.xLeft = left;
-		WMBorder.xRight = right;
-		WMBorder.yTop = top;
-		WMBorder.yBottom = bottom;
-
-		delete[] left;
-		delete[] right;
-		delete[] top;
-		delete[] bottom;
-
-		coordinatesSet = true;
-	}
-
 	if (pathManager.completionMessagePending) {
 		OSReport("Going to set CompletionMsg\n");
 		state.setState(&StateID_CompletionMsg);
@@ -7624,12 +4440,7 @@ void dScKoopatlas_c::executeState_Normal() {
 
 	if (pathManager.doingThings())
 		return;
-	
-	if (scrollHandle.Exists()) {
-		scrollHandle.Stop(0);
-		sfxIsPlaying = false;
-	}
-	
+
 	int nowPressed = Remocon_GetPressed(GetActiveRemocon());
 
 	// Nothing related to the menu is going on
@@ -7651,16 +4462,7 @@ void dScKoopatlas_c::executeState_Normal() {
 	 		for (int l = 0; l < 6; l++)
 	 			save->SetLevelCondition(w, l, COND_COIN_ALL);
 #endif
-	} else if (nowPressed & WPAD_A) {
-		WMViewerVisible = true;
-		hud->hideAll();
-		MapSoundPlayer(SoundRelatedClass, SE_SYS_MAP_VIEW_MODE, 1);
-		state.setState(&StateID_WMViewerWait);
-	}
-	else if (nowPressed & WPAD_B)
-	{
-		OSReport("Pos X/Y Mario: %02f, %02f\n", player->pos.x, player->pos.y);
-	}
+	} 
 }
 
 void dScKoopatlas_c::executeState_CSMenu() {
@@ -7883,45 +4685,6 @@ void dScKoopatlas_c::executeState_CoinsWait() {
 	if (!coins->visible) {
 		state.setState(&StateID_Normal);
 		hud->unhideAll();
-	}
-
-}
-
-
-void dScKoopatlas_c::executeState_WMViewerWait() {
-
-	int nowPressed = Remocon_GetPressed(GetActiveRemocon());
-
-	if (nowPressed & WPAD_A) {
-		if (sfxIsPlaying || scrollHandle.Exists()) {
-			scrollHandle.Stop(0);
-			sfxIsPlaying = false;
-		}
-
-		dWorldCamera_c::instance->panToPosition(player->pos.x, player->pos.y, 2.8f, true);
-
-		WMViewerVisible = false;
-
-		MapSoundPlayer(SoundRelatedClass, SE_SYS_MAP_VIEW_QUIT, 1);
-		state.setState(&StateID_Normal);
-		hud->unhideAll();
-	}
-
-	if (sfxShouldPlay)
-	{
-		if (!sfxIsPlaying)
-		{
-			PlaySoundWithFunctionB4(SoundRelatedClass, &scrollHandle, SE_SYS_MAP_VIEW_MOVING, 1);
-			sfxIsPlaying = true;
-		}
-	}
-	else
-	{
-		if (sfxIsPlaying)
-		{
-			scrollHandle.Stop(0);
-			sfxIsPlaying = false;
-		}
 	}
 
 }
@@ -8281,6 +5044,7 @@ void dScKoopatlas_c::executeState_CompletionMsg() {
 		// Used when we assemble a dynamic message
 		wchar_t text[512];
 
+#ifndef FALLING_LEAF
 		if (type >= CMP_MSG_COINS && type <= CMP_MSG_WORLD) {
 			// title
 			int w = pathManager.completionMessageWorldNum;
@@ -8305,6 +5069,7 @@ void dScKoopatlas_c::executeState_CompletionMsg() {
 			text[pos++] = 0;
 			baseText = text;
 		}
+#endif
 
 		yesNoWindow->T_question_00->SetString(baseText);
 		yesNoWindow->T_questionS_00->SetString(baseText);
@@ -8364,16 +5129,7 @@ void NewerMapDrawFunc() {
 	SetCurrentCameraID(0);
 }
 
-bool dWMBorderData::load(const char* path)
-{
-	void* temp = fileLoader.load(path);
-	fileLoader.unload();
-	if (temp) {
-		this->data = (dWMBorderFile_s*)temp;
-		return true;
-	}
-	return false;
-}
+
 //
 // processed\../src/koopatlas/player.cpp
 //
@@ -8627,8 +5383,8 @@ int dWMHud_c::onCreate() {
 		layout.resetAnim(SHOW_HEADER);
 		layout.resetAnim(HIDE_ALL);
 
-		static const char *tbNames[3] = {"MenuButtonInfo", "ItemsButtonInfo", "MenuButtonInf_00"};
-		layout.setLangStrings(tbNames, (int[3]){12, 15, 10}, 4, 3);
+		static const char *tbNames[2] = {"MenuButtonInfo", "ItemsButtonInfo"};
+		layout.setLangStrings(tbNames, (int[2]){12, 15}, 4, 2);
 
 		static const char *paneNames[] = {
 			"N_IconPos1P_00", "N_IconPos2P_00",
@@ -9053,8 +5809,9 @@ void dWMHud_c::updatePressableButtonThingies() {
 		int beef = (cntType == 0) ? 0 : 1;
 		GameMgrP->currentControllerType = beef;
 
-		static const char *tbNames[3] = {"MenuButtonInfo", "ItemsButtonInfo", "MenuButtonInf_00"};
-		layout.setLangStrings(tbNames, (int[3]){12, 15, 10}, 4, 3);
+		WriteBMGToTextBox(
+				layout.findTextBoxByName("ItemsButtonInfo"),
+				GetBMG(), 4, 15, 0);
 	}
 }
 
@@ -9134,93 +5891,40 @@ int dWorldCamera_c::onDelete() {
 
 
 int dWorldCamera_c::onExecute() {
-	if (dScKoopatlas_c::instance->WMViewerVisible)
-	{
-		// 2460.000000, -2376.000000
-		int heldButtons = Remocon_GetButtons(GetActiveRemocon());
-		bool wasSoundPlayed = false;
-		if (heldButtons & WPAD_LEFT) //left
-		{
-			if (currentX > dScKoopatlas_c::instance->WMBorder.xLeft[dScKoopatlas_c::instance->currentMapID]) {	
-				currentX -= 7.0f;
-				dScKoopatlas_c::instance->sfxShouldPlay = true;
-				wasSoundPlayed = true;
-			}
-			else
-				dScKoopatlas_c::instance->sfxShouldPlay = false;
+	if (dScKoopatlas_c::instance->warpZoneHacks) {
+		currentX = 2040.0f;
+		currentY = -1460.0f;
+		zoomLevel = 3.4f;
+
+	} else if (panning) {
+		// Calculate where we are
+#define SMOOTHSTEP(x) ((x) * (x) * (3 - 2 * (x)))
+		float stepRatio = panCurrentStep / panTotalSteps;
+		stepRatio = 1.0f - SMOOTHSTEP(stepRatio);
+		//OSReport("PAN: Step %f / %f ---- Ratio: %f", panCurrentStep, panTotalSteps, stepRatio);
+		//OSReport("From %f, %f to %f, %f --- Zoom: %f to %f\n", panFromX, panFromY, panToX, panToY, panFromZoom, panToZoom);
+
+		currentX = (panFromX * stepRatio) + (panToX * (1.0f - stepRatio));
+		currentY = (panFromY * stepRatio) + (panToY * (1.0f - stepRatio));
+		zoomLevel = (panFromZoom * stepRatio) + (panToZoom * (1.0f - stepRatio));
+		//OSReport("Calculated: %f, %f with zoom %f\n", currentX, currentY, zoomLevel);
+
+		panCurrentStep += 1.0f;
+
+		if (panCurrentStep > panTotalSteps) {
+			// YAY, we reached the end
+			panning = false;
+			currentX = panToX;
+			currentY = panToY;
+			zoomLevel = panToZoom;
 		}
-		else if (heldButtons & WPAD_RIGHT) //right
-		{
-			if (currentX < dScKoopatlas_c::instance->WMBorder.xRight[dScKoopatlas_c::instance->currentMapID]) {
-				currentX += 7.0f;
-				dScKoopatlas_c::instance->sfxShouldPlay = true;
-				wasSoundPlayed = true;
-			}
-			else
-				dScKoopatlas_c::instance->sfxShouldPlay = false;
-		}
-		if (heldButtons & WPAD_DOWN) //down
-		{
-			if (currentY > dScKoopatlas_c::instance->WMBorder.yBottom[dScKoopatlas_c::instance->currentMapID]) {
-				currentY -= 7.0f;
-				dScKoopatlas_c::instance->sfxShouldPlay = true;
-				wasSoundPlayed = true;
-			}
-			else
-				dScKoopatlas_c::instance->sfxShouldPlay = false;
-		}
-		else if (heldButtons & WPAD_UP) //up
-		{
-			if (currentY < dScKoopatlas_c::instance->WMBorder.yTop[dScKoopatlas_c::instance->currentMapID]) {
-				currentY += 7.0f;
-				dScKoopatlas_c::instance->sfxShouldPlay = true;
-				wasSoundPlayed = true;
-			}
-			else
-				dScKoopatlas_c::instance->sfxShouldPlay = false;
-		}
-		if (!wasSoundPlayed)
-		{
-			dScKoopatlas_c::instance->sfxShouldPlay = false;
-		}
+
+	} else if (followPlayer) {
+		daWMPlayer_c *player = daWMPlayer_c::instance;
+		currentX = player->pos.x;
+		currentY = player->pos.y;
 	}
-	else
-	{
 
-		if (dScKoopatlas_c::instance->warpZoneHacks) {
-			currentX = 2040.0f;
-			currentY = -1460.0f;
-			zoomLevel = 3.4f;
-
-		} else if (panning) {
-			// Calculate where we are
-	#define SMOOTHSTEP(x) ((x) * (x) * (3 - 2 * (x)))
-			float stepRatio = panCurrentStep / panTotalSteps;
-			stepRatio = 1.0f - SMOOTHSTEP(stepRatio);
-			//OSReport("PAN: Step %f / %f ---- Ratio: %f", panCurrentStep, panTotalSteps, stepRatio);
-			//OSReport("From %f, %f to %f, %f --- Zoom: %f to %f\n", panFromX, panFromY, panToX, panToY, panFromZoom, panToZoom);
-
-			currentX = (panFromX * stepRatio) + (panToX * (1.0f - stepRatio));
-			currentY = (panFromY * stepRatio) + (panToY * (1.0f - stepRatio));
-			zoomLevel = (panFromZoom * stepRatio) + (panToZoom * (1.0f - stepRatio));
-			//OSReport("Calculated: %f, %f with zoom %f\n", currentX, currentY, zoomLevel);
-
-			panCurrentStep += 1.0f;
-
-			if (panCurrentStep > panTotalSteps) {
-				// YAY, we reached the end
-				panning = false;
-				currentX = panToX;
-				currentY = panToY;
-				zoomLevel = panToZoom;
-			}
-
-		} else if (followPlayer) {
-			daWMPlayer_c *player = daWMPlayer_c::instance;
-			currentX = player->pos.x;
-			currentY = player->pos.y;
-		}
-	}
 	calculateScreenGeometry();
 	doStuff(10000.0);
 	generateCameraMatrices();
@@ -9286,7 +5990,7 @@ void dWorldCamera_c::panToBounds(float left, float top, float right, float botto
 }
 
 
-void dWorldCamera_c::panToPosition(float x, float y, float zoom, bool MapViewReturn) {
+void dWorldCamera_c::panToPosition(float x, float y, float zoom) {
 	panFromX = currentX;
 	panFromY = currentY;
 	panFromZoom = zoomLevel;
@@ -9299,12 +6003,7 @@ void dWorldCamera_c::panToPosition(float x, float y, float zoom, bool MapViewRet
 	float yDiff = abs(panToY - panFromY);
 
 	float panLength = sqrtf((xDiff*xDiff) + (yDiff*yDiff));
-
-	float panSteps;
-	if (MapViewReturn)
-		panSteps = panLength / 100.0f;
-	else
-		panSteps = panLength / 2.3f;
+	float panSteps = panLength / 2.3f;
 	float scaleSteps = abs(panToZoom - panFromZoom) / 0.1f;
 	float stepCount = max(panSteps, scaleSteps);
 
@@ -9316,8 +6015,7 @@ void dWorldCamera_c::panToPosition(float x, float y, float zoom, bool MapViewRet
 	panTotalSteps = stepCount;
 
 	panning = true;
-	if (!MapViewReturn)
-		followPlayer = false;
+	followPlayer = false;
 }
 
 
@@ -9993,31 +6691,10 @@ void dWMMap_c::doEffects() {
 		effects[6].spawn("Wm_cs_snow_b", 0, &efPos, &efRot, 0);
 	}
 #else
-	if (mapID == 1) {
-		// Fullmap.
-		// Torches
-		static const VEC3 torchPos[6] = {
-			{8402.0f, -5528.0f, 7000.0f}, // Big Tower
-			{8444.0f, -5524.0f, 7000.0f}, // Tower
-			{8358.0f, -5524.0f, 7000.0f}, // Tower
-			{8420.0f, -5534.0f, 7000.0f}, // Tower
-			{8380.0f, -5534.0f, 7000.0f}, // Tower
-			{7804.0f, -5064.0f, 7000.0f}, // Castle
-		};
-		const VEC3 reallyBigScale = {1.6f, 1.6f, 1.6f};
-		const VEC3 bigScale = {1.2f, 1.2f, 1.2f};
-		const VEC3 smallScale = {0.25f, 0.25f, 0.25f};
-		for (int i = 0; i < 6; i++) {
-			const VEC3 *whichScale = &smallScale;
-			if (i == 0)
-				whichScale = &bigScale;
-			else if (i == 5)
-				whichScale = &reallyBigScale;
-			effects[i].spawn("Wm_cs_torch", 0, &torchPos[i], &efRot, whichScale);
-		}
-
+	if (mapID == 0) {
+		// New
 		// Mountain Snow
-		const VEC3 efPos = {6000.0f, -5250.0f, 7000.0f};
+		const VEC3 efPos = {2200.0f, -2000.0f, 7000.0f};
 		effects[6].spawn("Wm_cs_snow_b", 0, &efPos, &efRot, 0);
 	}
 #endif
@@ -11132,7 +7809,7 @@ void dWMPathManager_c::execute() {
 				waitAfterInitialPlayerAnim = 60;
 
 				nw4r::snd::SoundHandle something;
-				PlaySoundWithFunctionB4(SoundRelatedClass, &something, SE_VOC_MA_CS_COURSE_MISS, 1);
+				PlaySoundWithFunctionB4(SoundRelatedClass, &something, SE_VOC_KO_CS_COURSE_MISS, 1);
 			} else if (mustPlayAfterWinAnim) {
 				daWMPlayer_c::instance->visible = true;
 				if (dScKoopatlas_c::instance->isAfter8Castle) {
@@ -11143,7 +7820,7 @@ void dWMPathManager_c::execute() {
 
 					nw4r::snd::SoundHandle something;
 					if (!wm->isEndingScene)
-						PlaySoundWithFunctionB4(SoundRelatedClass, &something, SE_VOC_MA_CS_JUMP, 1);
+						PlaySoundWithFunctionB4(SoundRelatedClass, &something, SE_VOC_KO_CS_JUMP, 1);
 				}
 			}
 		}
@@ -11258,7 +7935,7 @@ void dWMPathManager_c::execute() {
 		dmGladDuration--;
 		if (dmGladDuration == 60) {
 			nw4r::snd::SoundHandle something;
-			PlaySoundWithFunctionB4(SoundRelatedClass, &something, SE_VOC_MA_CLEAR_MULTI, 1);
+			PlaySoundWithFunctionB4(SoundRelatedClass, &something, SE_VOC_KO_CLEAR_MULTI, 1);
 		} else if (dmGladDuration == 0) {
 			daWMPlayer_c::instance->startAnimation(wait_select, 1.0f, 0.0f, 0.0f);
 		}
@@ -11448,7 +8125,7 @@ void dWMPathManager_c::startMovementTo(dKPPath_s *path) {
 		{jump,1.0f,10.0f, -1,2.5f, SE_NULL,SE_PLY_JUMP, 0,0},
 
 		// Jump water (actually cannon)
-		{dm_notice,1.0f,10.0f, -1,-1.0f, SE_NULL,SE_VOC_MA_CANNON_SHOT, 0,0},
+		{dm_notice,1.0f,10.0f, -1,-1.0f, SE_NULL,SE_VOC_KO_CANNON_SHOT, 0,0},
 
 		// Ladder up, left, right
 		{pea_plant,1.2f,10.0f, -0x7FFF,1.5f, SE_PLY_FOOTNOTE_CS_ROCK_CLIMB,SE_NULL, 0,0},
@@ -11473,7 +8150,7 @@ void dWMPathManager_c::startMovementTo(dKPPath_s *path) {
 		{run,1.0f,10.0f, -1,1.0f, SE_NULL,SE_NULL, 0,0},
 
 		// Cannon 2
-		{dm_noti_wait,1.0f,10.0f, -1,-1.0f, SE_NULL,SE_VOC_MA_CANNON_SHOT, 0,0},
+		{dm_noti_wait,1.0f,10.0f, -1,-1.0f, SE_NULL,SE_VOC_KO_CANNON_SHOT, 0,0},
 
 		// Invisible, this is handled specially
 		{wait,2.0f,10.0f, -1,1.0f, SE_NULL,SE_NULL, 0,0},
@@ -11561,7 +8238,7 @@ void dWMPathManager_c::startMovementTo(dKPPath_s *path) {
 			if (!swimming) {
 				nw4r::snd::SoundHandle something;
 				if (firstPathDone)
-					PlaySoundWithFunctionB4(SoundRelatedClass, &something, SE_VOC_MA_PNGN_SLIDE, 1);
+					PlaySoundWithFunctionB4(SoundRelatedClass, &something, SE_VOC_KO_PNGN_SLIDE, 1);
 				PlaySoundWithFunctionB4(SoundRelatedClass, &penguinSlideSound, SE_EMY_PENGUIN_SLIDE, 1);
 			}
 			player->hasSound = false;
@@ -11583,7 +8260,7 @@ void dWMPathManager_c::startMovementTo(dKPPath_s *path) {
 
 			if (Animations[id].initialSound == SE_PLY_JUMP) {
 				nw4r::snd::SoundHandle something2;
-				PlaySoundWithFunctionB4(SoundRelatedClass, &something2, SE_VOC_MA_CS_JUMP, 1);
+				PlaySoundWithFunctionB4(SoundRelatedClass, &something2, SE_VOC_KO_CS_JUMP, 1);
 				something2.SetPitch(player->modelHandler->mdlClass->powerup_id == 3 ? 1.5f : 1.0f);
 			}
 		}
@@ -11933,7 +8610,7 @@ void dWMPathManager_c::activatePoint() {
 		PlaySoundWithFunctionB4(SoundRelatedClass, &something, SE_SYS_GAME_START, 1);
 
 		nw4r::snd::SoundHandle something2;
-		PlaySoundWithFunctionB4(SoundRelatedClass, &something2, (Player_Powerup[0] == 3) ? SE_VOC_MA_PLAYER_DECIDE_MAME: SE_VOC_MA_CS_COURSE_IN, 1);
+		PlaySoundWithFunctionB4(SoundRelatedClass, &something2, (Player_Powerup[0] == 3) ? SE_VOC_MA_PLAYER_DECIDE_MAME: SE_VOC_KO_CS_COURSE_IN_MULTI, 1);
 
 		daWMPlayer_c::instance->startAnimation(course_in, 1.2, 10.0, 0.0);
 		daWMPlayer_c::instance->setTargetRotY(0);
@@ -13237,7 +9914,7 @@ void dWMStarCoin_c::executeState_Wait() {
 		if (!enableHardMode) {
 			enableHardMode = true;
 			OSReport("Hard Mode enabled!\n");
-			MapSoundPlayer(SoundRelatedClass, SE_VOC_MA_CS_COURSE_IN_HARD, 1);
+			MapSoundPlayer(SoundRelatedClass, SE_VOC_KO_CS_COURSE_IN_HARD, 1);
 			showSecretMessage(L"Hard Mode", linesOn, lineCountOn);
 		} else {
 			enableHardMode = false;
@@ -13297,7 +9974,7 @@ void dWMStarCoin_c::executeState_Wait() {
 			enableDebugMode = !enableDebugMode;
 
 			if (enableDebugMode) {
-				MapSoundPlayer(SoundRelatedClass, SE_VOC_MA_GET_PRIZE, 1);
+				MapSoundPlayer(SoundRelatedClass, SE_VOC_KO_GET_PRIZE, 1);
 
 				const int msgCount = 9;
 				static const wchar_t *msg[msgCount] = {
@@ -31754,3 +28431,1131 @@ NSMBWVer getNsmbwVer()
 	}
 	return pal; // To appease the compiler warning gods
 }
+//
+// processed\../src/midwayFlag.cpp
+//
+
+#include <common.h>
+#include <game.h>
+#include <dCourse.h>
+#include <g3dhax.h>
+#include <sfx.h>
+#include <stage.h>
+#include "midwayFlag.h"
+
+extern "C" bool midwayFlagOnCreate(daChukanPoint_c* self); // 0x807e2130
+extern "C" int midwayFlagOnExecute(daChukanPoint_c* self); // 0x807e24c0
+// extern "C" void stuffRelatingToCollisions(daChukanPoint_c* self, float, float, float); // 0x800957B0
+extern "C" void doSpriteMovement(daChukanPoint_c* self); // 0x800955F0
+extern "C" unsigned char checkWater(float x, float y, u8 layer, float *water_height); // 0x80075274 | 0 = None, 1 = Water, 2 = ???, 3 = Lava, 4 = Poison
+
+extern "C" void midwayFlagPowerUp(daChukanPoint_c* self, dAcPy_c* player); // 0x0x807e2ca0
+
+
+void midwayFlagCollisionCallback(ActivePhysics *one, ActivePhysics *two) {
+	// OSReport("Collision callback called! %s %s\n", one->owner->name_string, two->owner->name_string);
+	daChukanPoint_c* self = (daChukanPoint_c*)one->owner;
+	dStageActor_c* other = (dStageActor_c*)two->owner;
+
+	switch (other->name) {
+		case EN_JUMPDAI:
+			if (!self->enableGravity) break;
+
+			u8* jumpdaiTimer = (u8*)((u32)(other) + 0x632);
+
+			if(*jumpdaiTimer == 0 && self->speed.y < 0.0f) {
+				*jumpdaiTimer = 0x11;
+				PlaySound(self, SE_PLY_JUMPDAI);
+			}
+			else if(*jumpdaiTimer == 8) {
+				if (!self->isInLiquid()) self->speed.y = 6.0f;
+				else self->speed.y = 5.0f;
+			}
+			break;
+	}
+
+	self->activePhysicsCallback(one, two);
+}
+
+
+bool midwayFlagNewOnCreate(daChukanPoint_c* self) {
+    int color = self->settings >> 24 & 0xF; // Nibble 6
+
+	int entranceID = self->settings >> 16 & 0xFF; // Nibble 7-8
+
+	int nybble5 = self->settings >> 28 & 0xF; // Nibble 5
+	bool loadFacingLeft = nybble5 & 0b1000;
+	bool secondCheckpoint = nybble5 & 0b100;
+	self->enableGravity = nybble5 & 0b10;
+	self->disablePowerUp = nybble5 & 0b1;
+
+	int rotation = self->settings & 0xFFFF;
+
+    self->settings = color << 24 | entranceID << 16 | loadFacingLeft << 4 | secondCheckpoint; // Needed more bits so I need to do this
+
+    bool ret = midwayFlagOnCreate(self);
+	self->activePhysicsCallback = self->aPhysics.info.callback;
+	self->aPhysics.info.callback = midwayFlagCollisionCallback;
+	self->aPhysics.info.category1 = 0x3;
+	self->aPhysics.info.category2 = 0x0;
+	self->aPhysics.info.bitfield1 = 0x4F;
+	// self->aPhysics.info.bitfield2 = 0xffbafffe;
+	self->aPhysics.info.unkShort1C = 0;
+
+
+	// Rotation stuff
+
+	// rotation / 0xF * 0xFFFF == rotation * 0x1111
+	// BUT 0x1111 doesn't work with some high values for some reason so I'm using 0xFFF
+	self->rot.x = (float)(rotation); // X is vertical axis (0xFFF ~= 22.5 degrees)
+	self->rot.y = 0xBFF4; // Y is horizontal axis
+	self->rot.z = 0; // Z is ... an axis >.>
+	self->direction = 1; // Heading left.
+
+	// Can't rotate active physics sadly :(
+	
+	self->max_speed.x = 0;
+	self->speed.x = 0;
+    self->liquid = 0;
+
+	if (self->enableGravity) {
+		self->max_speed.y = -4.0;
+		self->speed.y = -4.0;
+		self->y_speed_inc = -0.1875;
+	} else {
+		self->max_speed.y = 0.0;
+		self->speed.y = 0.0;
+		self->y_speed_inc = 0.0;
+	}
+
+	self->acState.setState(&daChukanPoint_c::StateID_Wait);
+
+	Vec2 rotationBalance;
+	float angle = ((rotation / (float)(0xFFFF)) * 360.0) - 90.0;
+	if (angle < 0.0) angle += 360.0;
+	rotationBalance.x = cos(angle * M_PI / 180.0);
+	rotationBalance.y = sin(angle * M_PI / 180.0);
+
+	self->pos.y += 8.0;
+
+
+	// Physics stuff
+
+	Vec2 aPhysicsCenter = (Vec2){0.0, 0.0};
+	aPhysicsCenter.x = -24.0 * rotationBalance.x;
+	aPhysicsCenter.y = -24.0 * rotationBalance.y;
+
+	Vec2 aPhysicsEdge = (Vec2){0.0, 0.0};
+	aPhysicsEdge.x = 4.0 + abs(20.0 * rotationBalance.x);
+	aPhysicsEdge.y = 4.0 + abs(20.0 * rotationBalance.y);
+
+	self->aPhysics.info.xDistToCenter = (float)aPhysicsCenter.x;
+	self->aPhysics.info.yDistToCenter = (float)aPhysicsCenter.y;
+	self->aPhysics.info.xDistToEdge = (float)aPhysicsEdge.x;
+	self->aPhysics.info.yDistToEdge = (float)aPhysicsEdge.y;
+
+
+	// Tile collider
+
+	// These fucking rects do something for the tile rect
+	// spriteSomeRectX = 28.0f;
+	// spriteSomeRectY = 32.0f;
+	self->_320 = 0.0f;
+	self->_324 = 16.0f;
+
+	static const pointSensor_s below(0<<12, 0<<12);
+	static const pointSensor_s above(0<<12, 12<<12);
+	static const lineSensor_s adjacent(6<<12, 9<<12, 8<<12);
+
+	self->collMgr.init(self, &below, &above, &adjacent);
+	self->collMgr.calculateBelowCollisionWithSmokeEffect();
+
+	bool cmgr_returnValue = self->collMgr.isOnTopOfTile();
+
+	if (self->collMgr.isOnTopOfTile())
+		self->isBouncing = false;
+	else
+		self->isBouncing = true;
+
+    return ret;
+}
+
+
+bool calculateTileCollisions(daChukanPoint_c* self) {
+	// Returns true if sprite should turn, false if not.
+
+	self->HandleXSpeed();
+	self->HandleYSpeed();
+	doSpriteMovement(self);
+
+
+	bool cmgr_returnValue = self->collMgr.isOnTopOfTile();
+	// OSReport(self->collMgr.sCollBelow.)
+	self->collMgr.calculateBelowCollisionWithSmokeEffect();
+
+	if (self->isBouncing) {
+		// stuffRelatingToCollisions(self, 0.1875f, 1.0f, 0.5f);
+		if (self->speed.y != 0.0f)
+			self->isBouncing = false;
+	}
+
+	if (self->collMgr.isOnTopOfTile()) {
+		// Walking into a tile branch
+
+		if (cmgr_returnValue == 0)
+			self->isBouncing = true;
+			// OSReport("0x%x\n", self->collMgr.calculateBelowCollisionWithSmokeEffect());
+
+		if (self->speed.x != 0.0f) {
+			//playWmEnIronEffect();
+		}
+
+		self->speed.y = 0.0f;
+	} else {
+		self->x_speed_inc = 0.0f;
+	}
+
+	// Bouncing checks
+	if (self->_34A & 4) {
+		Vec v = (Vec){0.0f, 1.0f, 0.0f};
+		self->collMgr.pSpeed = &v;
+
+		if (self->collMgr.calculateAboveCollision(self->collMgr.outputMaybe))
+			self->speed.y = 0.0f;
+
+		self->collMgr.pSpeed = &self->speed;
+
+	} else {
+		if (self->collMgr.calculateAboveCollision(self->collMgr.outputMaybe))
+			self->speed.y = 0.0f;
+	}
+
+	self->collMgr.calculateAdjacentCollision(0);
+
+	// Switch Direction
+	if (self->collMgr.outputMaybe & (0x15 << self->direction)) {
+		if (self->collMgr.isOnTopOfTile()) {
+			self->isBouncing = true;
+		}
+		return true;
+	}
+	return false;
+}
+
+
+int midwayFlagNewOnExecute(daChukanPoint_c* self) {
+    if (self->enableGravity) calculateTileCollisions(self);
+
+    u8 newLiquid = checkWater(self->pos.x, self->pos.y + 20.0f, self->currentLayerID, (float*)0x0);
+    if (newLiquid != self->liquid) {
+        if (newLiquid == 0) {
+            if (self->acState.getCurrentState() != &daChukanPoint_c::StateID_Wait) {
+                self->acState.setState(&daChukanPoint_c::StateID_Wait);
+                if (self->enableGravity) {
+					self->max_speed.y = -4.0;
+					self->y_speed_inc = -0.1875;
+				}
+            }
+        }
+        else {
+            if (self->acState.getCurrentState() != &daChukanPoint_c::StateID_SeaWait) {
+                self->acState.setState(&daChukanPoint_c::StateID_SeaWait);
+				if (self->enableGravity) {
+					self->max_speed.y = -1.0;
+					if (self->speed.y < -1.0) self->speed.y = -1.0;
+					self->y_speed_inc = -0.09375;
+				}
+            }
+        }
+        self->liquid = newLiquid;
+    }
+
+    int ret = midwayFlagOnExecute(self);
+    return ret;
+}
+
+bool daChukanPoint_c::isInLiquid() {
+	return this->liquid != 0;
+}
+
+void midwayFlagSetItemKinopio(daChukanPoint_c* self, dAcPy_c* player) {
+	if (!self->disablePowerUp) midwayFlagPowerUp(self, player);
+}
+
+//
+// processed\../src/signboard.cpp
+//
+
+#include <common.h>
+#include <game.h>
+#include <g3dhax.h>
+#include <sfx.h>
+
+const char* SignboardArcNameList [] = {
+	"signboard",
+	NULL
+};
+
+class dSignboard_c : public dEn_c {
+	int onCreate();
+	int onDelete();
+	int onExecute();
+	int onDraw();
+
+	mHeapAllocator_c allocator;
+	nw4r::g3d::ResFile resFile;
+	m3d::mdl_c bodyModel;
+
+	m3d::anmChr_c chrAnimation;
+
+	float XSpeed;
+	u32 cmgr_returnValue;
+	bool isBouncing;
+
+	int color, rotation, arrowDirection;
+	bool enableGravity, placeBehindOtherSprites;
+	s16 colRot;
+
+	static dSignboard_c *build();
+
+	void bindAnimChr_and_setUpdateRate(const char* name, int unk, float unk2, float rate);
+	void updateModelMatrices();
+	bool calculateTileCollisions();
+
+	USING_STATES(dSignboard_c);
+	DECLARE_STATE(Wait);
+};
+
+dSignboard_c *dSignboard_c::build() {
+	void *buffer = AllocFromGameHeap1(sizeof(dSignboard_c));
+	return new(buffer) dSignboard_c;
+}
+
+///////////////////////
+// Externs and States
+///////////////////////
+	//FIXME make this dEn_c->used...
+	extern "C" char usedForDeterminingStatePress_or_playerCollision(dEn_c* t, ActivePhysics *apThis, ActivePhysics *apOther, int unk1);
+
+
+	CREATE_STATE(dSignboard_c, Wait);
+
+
+////////////////////////
+// Collision Functions
+////////////////////////
+
+
+bool dSignboard_c::calculateTileCollisions() {
+	// Returns true if sprite should turn, false if not.
+
+	HandleXSpeed();
+	HandleYSpeed();
+	doSpriteMovement();
+
+
+	cmgr_returnValue = collMgr.isOnTopOfTile();
+	collMgr.calculateBelowCollisionWithSmokeEffect();
+
+	if (isBouncing) {
+		stuffRelatingToCollisions(0.1875f, 1.0f, 0.5f);
+		if (speed.y != 0.0f)
+			isBouncing = false;
+	}
+
+	if (collMgr.isOnTopOfTile()) {
+		// Walking into a tile branch
+
+		if (cmgr_returnValue == 0)
+			isBouncing = true;
+
+		if (speed.x != 0.0f) {
+			//playWmEnIronEffect();
+		}
+
+		speed.y = 0.0f;
+	} else {
+		x_speed_inc = 0.0f;
+	}
+
+	// Bouncing checks
+	if (_34A & 4) {
+		Vec v = (Vec){0.0f, 1.0f, 0.0f};
+		collMgr.pSpeed = &v;
+
+		if (collMgr.calculateAboveCollision(collMgr.outputMaybe))
+			speed.y = 0.0f;
+
+		collMgr.pSpeed = &speed;
+
+	} else {
+		if (collMgr.calculateAboveCollision(collMgr.outputMaybe))
+			speed.y = 0.0f;
+	}
+
+	collMgr.calculateAdjacentCollision(0);
+
+	// Switch Direction
+	if (collMgr.outputMaybe & (0x15 << direction)) {
+		if (collMgr.isOnTopOfTile()) {
+			isBouncing = true;
+		}
+		return true;
+	}
+	return false;
+}
+
+
+/*****************************************************************************/
+// Glue Code
+
+
+void dSignboard_c::bindAnimChr_and_setUpdateRate(const char* name, int unk, float unk2, float rate) {
+	nw4r::g3d::ResAnmChr anmChr = this->resFile.GetResAnmChr(name);
+	this->chrAnimation.bind(&this->bodyModel, anmChr, unk);
+	this->bodyModel.bindAnim(&this->chrAnimation, unk2);
+	this->chrAnimation.setUpdateRate(rate);
+}
+
+int dSignboard_c::onCreate() {
+	this->color = this->settings >> 28 & 0xF;
+	this->arrowDirection = this->settings >> 24 & 0xF;
+
+	// int nybble7 = this->settings >> 20 & 0xF; // unused
+
+	int nybble8 = this->settings >> 16 & 0xF;
+	this->enableGravity = nybble8 & 0b1000;
+	this->placeBehindOtherSprites = nybble8 & 0b100;
+	// bool moveSlightlyHorizontally = nybble8 & 0b10;
+	// bool moveSlightlyUp = nybble8 & 0b1;
+
+	this->rotation = this->settings & 0xFFFF;
+
+	// Model creation
+	allocator.link(-1, GameHeaps[0], 0, 0x20);
+
+	char* resName = "";
+	sprintf(resName, "g3d/t%02d.brres", this->color);
+	resName[strlen(resName)] = 0;
+	resFile.data = getResource("signboard", resName);
+	nw4r::g3d::ResMdl mdl = this->resFile.GetResMdl("signboard");
+	bodyModel.setup(mdl, &allocator, 0, 1, 0);
+	SetupTextures_MapObj(&bodyModel, 0);
+
+
+	// Animations start here
+	nw4r::g3d::ResAnmChr anmChr = this->resFile.GetResAnmChr("signboard");
+	this->chrAnimation.setup(mdl, anmChr, &this->allocator, 0);
+
+	allocator.unlink();
+
+
+	// Stuff I do understand
+	this->scale = (Vec){1.0, 1.0, 1.0};
+
+	// rotation / 0xF * 0xFFFF == rotation * 0x1111
+	// BUT 0x1111 doesn't work with some high values for some reason so I'm using 0xFFF
+	this->rot.x = 0; // X is vertical axis
+	this->rot.y = 0; // Y is horizontal axis
+	this->rot.z = (float)(this->rotation); // Z is ... an axis >.> (0xFFF ~= 22.5 degrees)
+	this->direction = 1; // Heading left.
+	
+	this->speed.x = 0.0;
+	this->speed.y = 0.0;
+	this->max_speed.x = 0.8;
+	this->x_speed_inc = 0.0;
+	this->XSpeed = 0.8;
+
+	Vec2 rotationBalance;
+	float angle = ((this->rotation / (float)(0xFFFF)) * 360.0) - 90.0;
+	if (angle < 0.0) angle += 360.0;
+	rotationBalance.x = cos(angle * M_PI / 180.0);
+	rotationBalance.y = sin(angle * M_PI / 180.0);
+
+	// if (moveSlightlyHorizontally) this->pos.x -= ((rotationBalance.x + 1.0) / 2.0) * 2.0;
+	this->pos.y += 8.0;
+
+	// if (moveSlightlyUp) this->pos.y += 4.0;
+
+	this->pos.z = placeBehindOtherSprites ? -3500.0 : 0.0;
+
+
+	// Tile collider
+
+	// These fucking rects do something for the tile rect
+	spriteSomeRectX = 28.0f;
+	spriteSomeRectY = 32.0f;
+	_320 = 0.0f;
+	_324 = 16.0f;
+
+	static const pointSensor_s below(0<<12, 0<<12);
+	static const pointSensor_s above(0<<12, 12<<12);
+	static const lineSensor_s adjacent(6<<12, 9<<12, 8<<12);
+
+	collMgr.init(this, &below, &above, &adjacent);
+	collMgr.calculateBelowCollisionWithSmokeEffect();
+
+	cmgr_returnValue = collMgr.isOnTopOfTile();
+
+	if (collMgr.isOnTopOfTile())
+		isBouncing = false;
+	else
+		isBouncing = true;
+
+
+	// State Changers
+	bindAnimChr_and_setUpdateRate("signboard", 1, 0.0, 0.0);
+	this->chrAnimation.setCurrentFrame(this->arrowDirection);
+	this->doStateChange(&StateID_Wait);
+
+	this->onExecute();
+	return true;
+}
+
+int dSignboard_c::onDelete() {
+	return true;
+}
+
+int dSignboard_c::onExecute() {
+	acState.execute();
+	updateModelMatrices();
+
+	return true;
+}
+
+int dSignboard_c::onDraw() {
+	bodyModel.scheduleForDrawing();
+	return true;
+}
+
+void dSignboard_c::updateModelMatrices() {
+	matrix.translation(pos.x, pos.y, pos.z);
+	matrix.applyRotationYXZ(&rot.x, &rot.y, &rot.z);
+
+	bodyModel.setDrawMatrix(matrix);
+	bodyModel.setScale(&scale);
+	bodyModel.calcWorld(false);
+}
+
+
+///////////////
+// Wait State
+///////////////
+void dSignboard_c::beginState_Wait() {
+	this->max_speed.x = 0;
+	this->speed.x = 0;
+
+	if (!this->enableGravity) {
+		this->max_speed.y = 0.0;
+		this->speed.y = 0.0;
+		this->y_speed_inc = 0.0;
+	} else {
+		this->max_speed.y = -4.0;
+		this->speed.y = -4.0;
+		this->y_speed_inc = -0.1875;
+	}
+}
+void dSignboard_c::executeState_Wait() {
+	if (this->enableGravity) bool ret = calculateTileCollisions();
+
+	bodyModel._vf1C();
+}
+void dSignboard_c::endState_Wait() { }
+
+//
+// processed\../src/muncher.cpp
+//
+
+#include <common.h>
+#include <game.h>
+#include <g3dhax.h>
+#include <sfx.h>
+
+const char* MuncherArcNameList [] = {
+	"pakkun_black",
+	"ice",
+	NULL
+};
+
+class dMuncher_c : public dEn_c {
+	int onCreate();
+	int onDelete();
+	int onExecute();
+	int onDraw();
+
+	mHeapAllocator_c allocator;
+	nw4r::g3d::ResFile resFile;
+	m3d::mdl_c bodyModel;
+
+	m3d::anmChr_c chrAnimation;
+
+	mHeapAllocator_c iceAllocator;
+	nw4r::g3d::ResFile iceResFile;
+	m3d::mdl_c iceModel;
+	Vec iceScale;
+	float xIceScaleOffset, iceScaleMultiplier;
+
+	int timer;
+	int maxTimer;
+	float XSpeed;
+	u32 cmgr_returnValue;
+	bool isBouncing;
+
+	int color, rotation;
+	bool isFrozen, wideCollision, isFreezable, isBig, disableGravity, disableAnimSync;
+	s16 colRot;
+
+	Vec effectOffset;
+	Vec effectScale;
+
+	Physics::Info physicsInfo;
+	float topPhysicsPos, frozenTopPhysicsPos;
+	Physics physics;
+
+	static dMuncher_c *build();
+
+	void bindAnimChr_and_setUpdateRate(const char* name, int unk, float unk2, float rate);
+	void updateModelMatrices();
+	bool calculateTileCollisions();
+
+	USING_STATES(dMuncher_c);
+	DECLARE_STATE(Wait);
+	DECLARE_STATE(Frozen);
+	DECLARE_STATE(Freeze);
+	DECLARE_STATE(Unfreeze);
+
+	public:
+		bool normalActorCollision(dMuncher_c *saThis, dStageActor_c *saOther);
+		bool isCurrentlyFrozen();
+};
+
+dMuncher_c *dMuncher_c::build() {
+	void *buffer = AllocFromGameHeap1(sizeof(dMuncher_c));
+	return new(buffer) dMuncher_c;
+}
+
+///////////////////////
+// Externs and States
+///////////////////////
+	// extern "C" void *EN_LandbarrelPlayerCollision(dEn_c* t, ActivePhysics *apThis, ActivePhysics *apOther);
+
+	//FIXME make this dEn_c->used...
+	extern "C" char usedForDeterminingStatePress_or_playerCollision(dEn_c* t, ActivePhysics *apThis, ActivePhysics *apOther, int unk1);
+	// extern "C" int SmoothRotation(short* rot, u16 amt, int unk2);
+
+
+	CREATE_STATE(dMuncher_c, Wait);
+	CREATE_STATE(dMuncher_c, Frozen);
+	CREATE_STATE(dMuncher_c, Freeze);
+	CREATE_STATE(dMuncher_c, Unfreeze);
+
+
+////////////////////////
+// Collision Functions
+////////////////////////
+
+
+bool dMuncher_c::calculateTileCollisions() {
+	// Returns true if sprite should turn, false if not.
+
+	HandleXSpeed();
+	HandleYSpeed();
+	doSpriteMovement();
+
+
+	cmgr_returnValue = collMgr.isOnTopOfTile();
+	collMgr.calculateBelowCollisionWithSmokeEffect();
+
+	if (isBouncing) {
+		stuffRelatingToCollisions(0.1875f, 1.0f, 0.5f);
+		if (speed.y != 0.0f)
+			isBouncing = false;
+	}
+
+	if (collMgr.isOnTopOfTile()) {
+		// Walking into a tile branch
+
+		if (cmgr_returnValue == 0)
+			isBouncing = true;
+
+		if (speed.x != 0.0f) {
+			//playWmEnIronEffect();
+		}
+
+		speed.y = 0.0f;
+	} else {
+		x_speed_inc = 0.0f;
+	}
+
+	// Bouncing checks
+	if (_34A & 4) {
+		Vec v = (Vec){0.0f, 1.0f, 0.0f};
+		collMgr.pSpeed = &v;
+
+		if (collMgr.calculateAboveCollision(collMgr.outputMaybe))
+			speed.y = 0.0f;
+
+		collMgr.pSpeed = &speed;
+
+	} else {
+		if (collMgr.calculateAboveCollision(collMgr.outputMaybe))
+			speed.y = 0.0f;
+	}
+
+	collMgr.calculateAdjacentCollision(0);
+
+	// Switch Direction
+	if (collMgr.outputMaybe & (0x15 << direction)) {
+		if (collMgr.isOnTopOfTile()) {
+			isBouncing = true;
+		}
+		return true;
+	}
+	return false;
+}
+
+
+bool dMuncher_c::normalActorCollision(dMuncher_c *saThis, dStageActor_c *saOther) {
+	if (saOther->stageActorType != 0) return false;
+
+	switch (saOther->name) {
+		case PL_FIREBALL:
+		case BROS_FIREBALL:
+		case PAKKUN_FIREBALL:
+		case EN_FIREBAR:
+		case EN_FIRESNAKE:
+		case FIRE_BLITZ:
+		case JR_FIRE:
+		case KOOPA_FIRE:
+			if (this->isFrozen) doStateChange(&StateID_Unfreeze);
+			return true;
+
+		case ICEBALL:
+		case BROS_ICEBALL:
+			if (this->isFreezable && !this->isFrozen) {
+				doStateChange(&StateID_Freeze);
+				saOther->Delete(1);
+			}
+			return true;
+	}
+
+	return false;
+}
+
+bool dMuncher_c::isCurrentlyFrozen() {
+	return this->isFrozen;
+}
+
+
+/*****************************************************************************/
+// Glue Code
+extern "C" void HurtMarioBecauseOfBeingSquashed(void *mario, dStageActor_c *squasher, int type);
+
+static void MuncherPhysCB1(dMuncher_c *one, dStageActor_c *two) { // Mario/Yoshi on top / Muncher on bottom
+	if (one->normalActorCollision(one, two)) return;
+
+	if (two->stageActorType != 1 && two->stageActorType != 2)
+		return;
+
+	if (one->pos_delta.y > 0.0f)
+		HurtMarioBecauseOfBeingSquashed(two, one, 1);
+
+	else if (one->pos_delta.y < 0.0f)
+		HurtMarioBecauseOfBeingSquashed(two, one, 9);
+
+	if (two->stageActorType == 1) { // Mario
+		if (!one->isCurrentlyFrozen()) one->_vf220(two);
+	}
+}
+
+static void MuncherPhysCB2(dMuncher_c *one, dStageActor_c *two) { // Mario/Yoshi on bottom / Muncher on top
+	if (one->normalActorCollision(one, two)) return;
+
+	if (two->stageActorType != 1 && two->stageActorType != 2)
+		return;
+
+	if (one->pos_delta.y < 0.0f)
+		HurtMarioBecauseOfBeingSquashed(two, one, 2);
+
+	else if (one->pos_delta.y > 0.0f)
+		HurtMarioBecauseOfBeingSquashed(two, one, 10);
+
+	if (!one->isCurrentlyFrozen()) one->_vf220(two);
+}
+
+static void MuncherPhysCB3(dMuncher_c *one, dStageActor_c *two, bool unkMaybeNotBool) { // Mario/Yoshi on side
+	if (one->normalActorCollision(one, two)) return;
+
+	if (two->stageActorType != 1 && two->stageActorType != 2)
+		return;
+
+	if (!one->isCurrentlyFrozen()) one->_vf220(two);
+}
+
+static bool MuncherPhysCB4(dMuncher_c *one, dStageActor_c *two) {
+	return true;
+}
+
+static bool MuncherPhysCB5(dMuncher_c *one, dStageActor_c *two) {
+	return true;
+}
+
+static bool MuncherPhysCB6(dMuncher_c *one, dStageActor_c *two, bool unkMaybeNotBool) {
+	return true;
+}
+
+
+void dMuncher_c::bindAnimChr_and_setUpdateRate(const char* name, int unk, float unk2, float rate) {
+	nw4r::g3d::ResAnmChr anmChr = this->resFile.GetResAnmChr(name);
+	this->chrAnimation.bind(&this->bodyModel, anmChr, unk);
+	this->bodyModel.bindAnim(&this->chrAnimation, unk2);
+	this->chrAnimation.setUpdateRate(rate);
+}
+
+int dMuncher_c::onCreate() {
+
+	this->deleteForever = true;
+
+	this->color = this->settings >> 28 & 0xF;
+
+	int nybble5 = this->settings >> 24 & 0xF;
+	this->isBig = nybble5 & 0b1000;
+	this->wideCollision = nybble5 & 0b100;
+	this->disableAnimSync = nybble5 & 0b10;
+	this->disableGravity = nybble5 & 0b1;
+
+	int nybble8 = this->settings >> 16 & 0xF;
+	bool moveSlightlyHorizontally = nybble8 & 0b1000;
+	bool moveSlightlyUp = nybble8 & 0b100;
+	this->isFreezable = nybble8 & 0b10;
+	this->isFrozen = nybble8 & 0b1;
+
+	this->rotation = this->settings & 0xFFFF;
+
+	// Model creation
+	allocator.link(-1, GameHeaps[0], 0, 0x20);
+
+	char* resName = "";
+	sprintf(resName, "g3d/t%02d.brres", this->color);
+	resName[strlen(resName)] = 0;
+	resFile.data = getResource("pakkun_black", resName);
+	nw4r::g3d::ResMdl mdl = this->resFile.GetResMdl("pakkun_black");
+	bodyModel.setup(mdl, &allocator, 0, 1, 0);
+	SetupTextures_Enemy(&bodyModel, 0);
+
+
+	// Animations start here
+	nw4r::g3d::ResAnmChr anmChr = this->resFile.GetResAnmChr("attack");
+	this->chrAnimation.setup(mdl, anmChr, &this->allocator, 0);
+
+	allocator.unlink();
+
+
+	// Ice Model creation
+	iceAllocator.link(-1, GameHeaps[0], 0, 0x20);
+
+	iceResFile.data = getResource("ice", "g3d/ice.brres");
+	nw4r::g3d::ResMdl icemdl = this->iceResFile.GetResMdl("ice_A1");
+	iceModel.setup(icemdl, &iceAllocator, 0, 1, 0);
+	SetupTextures_MapObj(&iceModel, 0);
+
+	iceAllocator.unlink();
+
+
+	// Stuff I do understand
+	this->scale = (Vec){1.0, 1.0, 1.0};
+	if (this->isBig) this->scale = (Vec){2.0, 2.0, 2.0};
+	this->iceScaleMultiplier = 0.89;
+	this->iceScale = (Vec){this->iceScaleMultiplier * this->scale.x, this->iceScaleMultiplier * this->scale.y, this->iceScaleMultiplier * this->scale.z};
+
+	// rotation / 0xF * 0xFFFF == rotation * 0x1111
+	// BUT 0x1111 doesn't work with some high values for some reason so I'm using 0xFFF
+	this->rot.x = (float)(this->rotation); // X is vertical axis (0xFFF ~= 22.5 degrees)
+	this->rot.y = 0x3FFF; // Y is horizontal axis
+	this->rot.z = 0; // Z is ... an axis >.>
+	this->direction = 1; // Heading left.
+	
+	this->speed.x = 0.0;
+	this->speed.y = 0.0;
+	this->max_speed.x = 0.8;
+	this->x_speed_inc = 0.0;
+	this->XSpeed = 0.8;
+
+	Vec2 rotationBalance;
+	float angle = ((this->rotation / (float)(0xFFFF)) * 360.0) - 90.0;
+	if (angle < 0.0) angle += 360.0;
+	rotationBalance.x = cos(angle * M_PI / 180.0);
+	rotationBalance.y = sin(angle * M_PI / 180.0);
+
+	float colBalance = 0.0;
+	if (this->wideCollision) colBalance = (1.0 - (abs(rotationBalance.x) + abs(rotationBalance.y) - 1.0)) / 2.0; // Because yoshi falls between two munchers when there is an angle
+
+	this->physicsInfo.x1 = (-8 * this->scale.x) - colBalance;
+	this->physicsInfo.y1 = 16.0 * 0.89 * this->scale.y; // 0.89 is the scale of the default frozen muncher
+	this->physicsInfo.x2 = (8 * this->scale.x) + colBalance;
+	this->physicsInfo.y2 = 0.0;
+
+	this->topPhysicsPos = this->physicsInfo.y1;
+	this->frozenTopPhysicsPos = 16.0 * 1.09 * this->scale.y; // 1.09 bc you still take damage with 1.0
+
+	this->xIceScaleOffset = colBalance / 2.0;
+	this->iceScale.x += this->xIceScaleOffset;
+
+	this->physicsInfo.otherCallback1 = &MuncherPhysCB1;
+	this->physicsInfo.otherCallback2 = &MuncherPhysCB2;
+	this->physicsInfo.otherCallback3 = &MuncherPhysCB3;
+
+	physics.setup(this, &this->physicsInfo, 3, currentLayerID);
+	physics.flagsMaybe = 0x260;
+	physics.callback1 = &MuncherPhysCB4;
+	physics.callback2 = &MuncherPhysCB5;
+	physics.callback3 = &MuncherPhysCB6;
+	this->colRot = -this->rot.x;
+	physics.setPtrToRotation(&this->colRot);
+
+	physics.addToList();
+
+	if (moveSlightlyHorizontally) this->pos.x -= ((rotationBalance.x + 1.0) / 2.0) * 2.0;
+	this->pos.y += 8.0;
+
+	if (moveSlightlyUp) this->pos.y += 4.0;
+
+	this->effectOffset.x = rotationBalance.x * 8.0;
+	this->effectOffset.y = rotationBalance.y * -8.0;
+	this->effectOffset.z = 0.0;
+
+	this->effectScale = (Vec){.5 * this->scale.x, .5 * this->scale.x, .5 * this->scale.x};
+
+
+	// Tile collider
+
+	// These fucking rects do something for the tile rect
+	spriteSomeRectX = 28.0f;
+	spriteSomeRectY = 32.0f;
+	_320 = 0.0f;
+	_324 = 16.0f;
+
+	static const pointSensor_s below(0<<12, 0<<12);
+	static const pointSensor_s above(0<<12, 12<<12);
+	static const lineSensor_s adjacent(6<<12, 9<<12, 8<<12);
+
+	collMgr.init(this, &below, &above, &adjacent);
+	collMgr.calculateBelowCollisionWithSmokeEffect();
+
+	cmgr_returnValue = collMgr.isOnTopOfTile();
+
+	if (collMgr.isOnTopOfTile())
+		isBouncing = false;
+	else
+		isBouncing = true;
+
+
+	// State Changers
+	bindAnimChr_and_setUpdateRate("attack", 1, 0.0, 1.0);
+	if (this->isFrozen) this->doStateChange(&StateID_Frozen);
+	else this->doStateChange(&StateID_Wait);
+
+	this->onExecute();
+	return true;
+}
+
+int dMuncher_c::onDelete() {
+	return true;
+}
+
+int dMuncher_c::onExecute() {
+	acState.execute();
+	physics.update();
+	updateModelMatrices();
+
+	return true;
+}
+
+int dMuncher_c::onDraw() {
+	bodyModel.scheduleForDrawing();
+	if (this->isFrozen) iceModel.scheduleForDrawing();
+
+	return true;
+}
+
+void dMuncher_c::updateModelMatrices() {
+	matrix.translation(pos.x, pos.y, pos.z);
+	matrix.applyRotationYXZ(&rot.x, &rot.y, &rot.z);
+
+	bodyModel.setDrawMatrix(matrix);
+	bodyModel.setScale(&scale);
+	bodyModel.calcWorld(false);
+
+	if (this->isFrozen) {
+		iceModel.setDrawMatrix(matrix);
+		iceModel.setScale(&iceScale);
+		iceModel.calcWorld(false);
+	}
+}
+
+
+///////////////
+// Wait State
+///////////////
+void dMuncher_c::beginState_Wait() {
+	this->max_speed.x = 0;
+	this->speed.x = 0;
+
+	if (this->disableGravity) {
+		this->max_speed.y = 0.0;
+		this->speed.y = 0.0;
+		this->y_speed_inc = 0.0;
+	} else {
+		this->max_speed.y = -4.0;
+		this->speed.y = -4.0;
+		this->y_speed_inc = -0.1875;
+	}
+
+	this->chrAnimation.setUpdateRate(1.0);
+	if (!this->disableAnimSync) {
+		float frame = dScStage_c::exeFrame % int(this->chrAnimation.numFrames);
+    	this->chrAnimation.setCurrentFrame(frame);
+	}
+
+	this->isFrozen = false;
+	this->physics.flagsMaybe = 0x260;
+	this->physicsInfo.y1 = this->topPhysicsPos;
+	this->physics.setup(this, &this->physicsInfo, 3, currentLayerID);
+	physics.setPtrToRotation(&this->colRot);
+}
+void dMuncher_c::executeState_Wait() {
+	if (!this->disableGravity) bool ret = calculateTileCollisions();
+
+	bodyModel._vf1C();
+
+	if(this->chrAnimation.isAnimationDone()) {
+		this->chrAnimation.setCurrentFrame(0.0);
+	}
+}
+void dMuncher_c::endState_Wait() { }
+
+
+///////////////
+// Frozen State
+///////////////
+void dMuncher_c::beginState_Frozen() {
+	this->max_speed.x = 0;
+	this->speed.x = 0;
+
+	this->max_speed.y = 0.0;
+	this->speed.y = 0.0;
+	this->y_speed_inc = 0.0;
+
+	this->chrAnimation.setUpdateRate(0.0); // Just in case it changes state too fast
+
+	this->isFrozen = true;
+	this->physics.flagsMaybe = 0x268;
+	this->physicsInfo.y1 = this->frozenTopPhysicsPos;
+	this->physics.setup(this, &this->physicsInfo, 3, currentLayerID);
+	physics.setPtrToRotation(&this->colRot);
+
+	this->iceScale = (Vec){this->iceScaleMultiplier * this->scale.x + this->xIceScaleOffset, this->iceScaleMultiplier * this->scale.y, this->iceScaleMultiplier * this->scale.z};
+}
+void dMuncher_c::executeState_Frozen() {
+	bodyModel._vf1C();
+}
+void dMuncher_c::endState_Frozen() {
+	// this->isFrozen = false;
+	// this->physics.flagsMaybe = 0x260;
+}
+
+
+///////////////
+// Freeze State
+///////////////
+void dMuncher_c::beginState_Freeze() {
+	this->max_speed.x = 0;
+	this->speed.x = 0;
+
+	this->max_speed.y = 0.0;
+	this->speed.y = 0.0;
+	this->y_speed_inc = 0.0;
+
+	this->chrAnimation.setUpdateRate(0.0);
+
+	this->isFrozen = true;
+	this->physics.flagsMaybe = 0x268;
+	this->physicsInfo.y1 = this->frozenTopPhysicsPos;
+	this->physics.setup(this, &this->physicsInfo, 3, currentLayerID);
+	physics.setPtrToRotation(&this->colRot);
+
+	this->iceScale = (Vec){0, 0, 0};
+	this->timer = 0;
+	this->maxTimer = 6;
+
+	S16Vec nullRot = {0,0,0};
+	Vec oneVec = {1.0f, 1.0f, 1.0f};
+	Vec effPos = {this->pos.x + this->effectOffset.x, this->pos.y + this->effectOffset.y, this->pos.z + this->effectOffset.z};
+	SpawnEffect("Wm_ob_iceattack", 0, &effPos, &nullRot, &oneVec);
+	SpawnEffect("Wm_ob_iceattackkira", 0, &effPos, &nullRot, &oneVec);
+	SpawnEffect("Wm_ob_iceattackline", 0, &effPos, &nullRot, &oneVec);
+	SpawnEffect("Wm_ob_iceattacksmk", 0, &effPos, &nullRot, &oneVec);
+
+	PlaySoundAsync(this, SE_OBJ_PNGN_ICE_FREEZE);
+}
+void dMuncher_c::executeState_Freeze() {
+	this->timer++;
+
+	float scale = this->iceScaleMultiplier * ((float)this->timer / (float)this->maxTimer) * this->scale.x;
+	this->iceScale = (Vec){scale + this->xIceScaleOffset, scale, scale};
+
+	if (this->timer >= this->maxTimer) this->doStateChange(&StateID_Frozen);
+
+	bodyModel._vf1C();
+}
+void dMuncher_c::endState_Freeze() {}
+
+
+///////////////
+// Unfreeze State
+///////////////
+void dMuncher_c::beginState_Unfreeze() {
+	this->max_speed.x = 0;
+	this->speed.x = 0;
+
+	this->max_speed.y = 0.0;
+	this->speed.y = 0.0;
+	this->y_speed_inc = 0.0;
+
+	this->chrAnimation.setUpdateRate(0.0); // Just in case it changes state too fast
+
+	this->isFrozen = true;
+	this->physics.flagsMaybe = 0x268;
+	this->physicsInfo.y1 = this->frozenTopPhysicsPos;
+	this->physics.setup(this, &this->physicsInfo, 3, currentLayerID);
+	physics.setPtrToRotation(&this->colRot);
+
+	this->iceScale = (Vec){this->iceScaleMultiplier * this->scale.x + this->xIceScaleOffset, this->iceScaleMultiplier * this->scale.y, this->iceScaleMultiplier * this->scale.z};
+	this->timer = 30;
+	this->maxTimer = this->timer;
+
+	S16Vec nullRot = {0,0,0};
+	Vec oneVec = {1.0f, 1.0f, 1.0f};
+	Vec effPos = {this->pos.x + this->effectOffset.x, this->pos.y + this->effectOffset.y, this->pos.z + this->effectOffset.z};
+	SpawnEffect("Wm_ob_iceevaporate", 0, &effPos, &nullRot, &oneVec);
+	PlaySoundAsync(this, SE_EMY_FIRE_SNAKE_EXTINCT);
+}
+void dMuncher_c::executeState_Unfreeze() {
+	this->timer--;
+
+	float scale = this->iceScaleMultiplier * ((float)this->timer / (float)this->maxTimer) * this->scale.x;
+	this->iceScale = (Vec){scale + this->xIceScaleOffset, scale, scale};
+
+	if (this->timer <= 0) this->doStateChange(&StateID_Wait);
+
+	bodyModel._vf1C();
+}
+void dMuncher_c::endState_Unfreeze() {
+	this->isFrozen = false;
+	this->physics.flagsMaybe = 0x260;
+	this->physicsInfo.y1 = this->topPhysicsPos;
+	this->physics.setup(this, &this->physicsInfo, 3, currentLayerID);
+	physics.setPtrToRotation(&this->colRot);
+}
+
+
