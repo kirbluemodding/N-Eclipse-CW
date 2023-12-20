@@ -444,6 +444,11 @@ void GameSetupDrawFunc();
 void GameSetup__LoadScene(void *self); // 0x80919560
 void FreeScene(int id);
 
+void getSpriteTexResName(char* buffer, int resID) {
+    sprintf(buffer, "g3d/t%02d.brres", resID);
+    buffer[strlen(buffer)] = 0;
+}
+
 void WpadShit(int unk); // 0x8016F780
 
 void *BgTexMng__LoadAnimTile(void *self, int tileset, short tile, char *name, char *delays, char reverse); // 0x80087B60

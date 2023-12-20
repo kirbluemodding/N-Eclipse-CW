@@ -65,7 +65,7 @@ int daEnFlipBlock_c::onCreate() {
 	allocator.link(-1, GameHeaps[0], 0, 0x20);
 
 	char resName[16];
-	// getSpriteTexResName(resName, color);
+	getSpriteTexResName(resName, color);
 	this->resFile.data = getResource("block_round", resName);
 
 	nw4r::g3d::ResMdl leftMdl = this->resFile.GetResMdl("left");

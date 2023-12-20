@@ -4,6 +4,11 @@ SECTIONS {
 	exeFrame__10dScStage_c = 0x8042a4e0;
 
 	doSearchNearPlayer__8dActor_cFP7Point2dP7Point2d = 0x80064790;
+	
+	aWm_ob_eggbreak = 0x80989d60;
+    aWm_ob_eggbre_0 = 0x80989d74;
+    aWm_ob_eggbre_1 = 0x80989d88;
+    aWm_ob_eggbre_2 = 0x80989d9c;
 
 	midwayFlagOnCreate = 0x807e2130;
 	midwayFlagOnExecute = 0x807e2410;
