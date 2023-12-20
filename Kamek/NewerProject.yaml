@@ -74,10 +74,10 @@ modules:
   - processed/exceptionHandler.yaml
   - processed/actors.yaml
   # new stuff
+  #- processed/tripleblock.yaml
   - processed/profile.yaml
-  - processed/midwayFlag.yaml
+  #- processed/midwayFlag.yaml
   - processed/signboard.yaml
-  - processed/goombrat.yaml
-  - processed/tenten.yaml
-  - processed/muncher.yaml
+  #- processed/tenten.yaml
+  #- processed/muncher.yaml
   - processed/flipblock.yaml # not a new idea, a new sprite
