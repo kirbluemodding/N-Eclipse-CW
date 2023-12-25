@@ -7,13 +7,13 @@
 		<region type="W"/>
 	</id>
 	<options>
-		<section name="Cascade Glade Demo">
-			<option name="Game" id="newercore" default="1">
-				<choice name="Enabled"><patch id="newercore"/></choice>
+		<section name="Super Mario Eternal Eclipse">
+			<option name="Game" id="eclipsecore" default="1">
+				<choice name="Enabled"><patch id="eclipsecore"/></choice>
 			</option>
 		</section>
 	</options>
-	<patch id="newercore">
+	<patch id="eclipsecore">
 		<savegame external="/save/{$__gameid}{$__region}" clone="false" /> -->
 		<folder external="Tilesets" disc="/Stage/Texture" create="true" />
 		<folder external="TitleReplay" disc="/Replay/title" create="true" />

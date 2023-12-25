@@ -199,6 +199,7 @@ const char* SFXNameList [] = {
 	"tenten_step_l",      // 2003
 	"tenten_step_r",      // 2004
 	"block_round_sway",      // 2005
+	"block_electricity",      // 2006
 	NULL
 };
 
@@ -208,6 +209,7 @@ const char* SFXNameList [] = {
 #define SFX_TENTEN_STEP_L 2003
 #define SFX_TENTEN_STEP_R 2004
 #define SFX_BLOCK_ROUND_SWAY 2005
+#define SFX_BLOCK_ELECTRICITY 2006
 
 int currentSFX = -1;
 u32 *currentPtr = 0;

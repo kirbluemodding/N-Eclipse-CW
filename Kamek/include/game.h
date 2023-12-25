@@ -33,6 +33,8 @@ float cos(float x);
 float sin(float x);
 float ceil(float x);
 float floor(float x);
+float pow(float x, float y);
+float sqrt(float x) { return pow(x, 0.5f); }
 }
 enum Direction {
 	RIGHT = 0,
@@ -447,6 +449,18 @@ void FreeScene(int id);
 void getSpriteTexResName(char* buffer, int resID) {
     sprintf(buffer, "g3d/t%02d.brres", resID);
     buffer[strlen(buffer)] = 0;
+}
+
+int getNybbleValue(u32 settings, int fromNybble, int toNybble) {
+	int numberOfNybble = (toNybble - fromNybble) + 1;
+	int valueToUse = 48 - (4 * toNybble);
+	int fShit = pow(16, numberOfNybble) - 1;
+	return ((settings >> valueToUse) & fShit);
+}
+
+void getSpriteTexResName255(char* buffer, int resID) {
+	sprintf(buffer, "g3d/t%03d.brres", resID);
+	buffer[strlen(buffer)] = 0;
 }
 
 void WpadShit(int unk); // 0x8016F780
@@ -1346,6 +1360,12 @@ public:
 	typedef void (*Callback)(ActivePhysics *self, ActivePhysics *other);
 
 	struct Info {
+		enum CollisionTypes {
+			NORMAL = 0,
+			CIRCLE = 1,
+			VERTICAL_TRAPEZOID = 2,
+			HORIZONTAL_TRAPEZOID = 3
+		};
 		float xDistToCenter;
 		float yDistToCenter;
 		float xDistToEdge;
@@ -2088,7 +2108,13 @@ public:
 	u8 _34A, _34B;
 	u8 *spriteByteStorage;
 	u16 *spriteShortStorage;
+	union {
 	u16 spriteFlagNum;
+	struct {
+		u8 eventId2; // nybble 1-2
+		u8 eventId1; // nybble 3-4
+	};
+};
 	u64 spriteFlagMask;
 	u32 _360;
 	u16 spriteSomeFlag;

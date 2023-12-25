@@ -20,7 +20,7 @@ namespace nw4r {
 		class dScStage_c {
 			public:
 				static u32 exeFrame;
-};
+		};
 
 		class ResNode {
 			public:

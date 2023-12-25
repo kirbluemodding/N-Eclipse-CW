@@ -357,8 +357,8 @@ void daEnPataTenten_c::executePlaysound() {
 void daEnPataTenten_c::playsound(int id) {
 	ClassWithCameraInfo *cwci = ClassWithCameraInfo::instance;
 	Vec2 dist = {
-		cwci->screenCenterX - this->pos.x,
-		cwci->screenCenterY - this->pos.y
+		cwci->screenCentreX - this->pos.x,
+		cwci->screenCentreY - this->pos.y
 	};
 	float volume = max<float>(0.0, (1.0 - (sqrtf(dist.x * dist.x + dist.y * dist.y) / 500.0)) * 1.0);
 	if (volume <= 0.0) return;
@@ -484,6 +484,7 @@ void daEnPataTenten_c::endState_FollowPath() { }
 ///////////////
 void daEnPataTenten_c::beginState_DieStomp() {
 	this->removeMyActivePhysics();
+	this->playsound(SFX_TENTEN_STEP_L);
 
 	bindAnimChr_and_setUpdateRate("damage", 1, 0.0, 1.0);
 	this->rot.y = 0;

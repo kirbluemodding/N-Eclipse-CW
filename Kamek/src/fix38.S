@@ -25,6 +25,15 @@ fix38WithJumpCoin:
 	li r3, 0
 	b returnFromFlagObjCheck
 
+.global fixLightmapsForDolphin # fuck you it goes here now
+fixLightmapsForDolphin:
+	li r4, 5
+    stb r4, 0xc(r3)
+    li r4, 1
+    stb r4, 0xd(r3)
+    li r4, 0
+    blr
+
 isExemptedActor:
 	b continueFromFlagObjCheck
 

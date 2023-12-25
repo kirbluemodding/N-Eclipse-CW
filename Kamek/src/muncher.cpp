@@ -445,7 +445,7 @@ void dMuncher_c::beginState_Wait() {
 
 	this->chrAnimation.setUpdateRate(1.0);
 	if (!this->disableAnimSync) {
-		float frame = dScStage_c::exeFrame % int(this->chrAnimation.numFrames);
+		float frame = dScStage_c::exeFrame % int(this->chrAnimation._28);
     	this->chrAnimation.setCurrentFrame(frame);
 	}
 

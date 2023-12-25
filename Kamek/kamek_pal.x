@@ -2,6 +2,16 @@ SECTIONS {
 	instance__7StageC4 = 0x8042A2B8;
 
 	exeFrame__10dScStage_c = 0x8042a4e0;
+	
+	init__Q25Light18dCircleLightMask_cFP12mAllocator_cUi = 0x800ccb70;
+	execute__Q25Light18dCircleLightMask_cFv = 0x800ccc30;
+	draw__Q25Light18dCircleLightMask_cFv = 0x800ccce0;
+	setup__Q25Light7dMask_cFP16mHeapAllocator_cPQ25Light8spline_cUi = 0x800cb580;
+	sub_80021740__15daEnBlockMain_cFv = 0x80021740;
+	execute__Q25Light7dMask_cFv = 0x800cb6a0;
+	draw__Q25Light7dMask_cFv = 0x800cb6c0;
+	GetLightBTI = 0x800cac00;
+	LightTypeArray = 0x80317a20;
 
 	doSearchNearPlayer__8dActor_cFP7Point2dP7Point2d = 0x80064790;
 	
@@ -9,6 +19,7 @@ SECTIONS {
     aWm_ob_eggbre_0 = 0x80989d74;
     aWm_ob_eggbre_1 = 0x80989d88;
     aWm_ob_eggbre_2 = 0x80989d9c;
+	pow = 0x802E5894;
 
 	midwayFlagOnCreate = 0x807e2130;
 	midwayFlagOnExecute = 0x807e2410;

@@ -18,7 +18,7 @@ public:
 	dCourse_c::railNode_s* nextNode;
 	int currentNodeNum, ignoreLastNodesCount;
 	int steps;
-	float speed;
+	float pathSpeed;
 	bool speedFromPath;
 
 	bool loop;
@@ -67,15 +67,16 @@ void dEnBlockPath_c::executeState_Wait() { }
 void dEnBlockPath_c::endState_Wait() { }
 
 void dEnBlockPath_c::beginState_Init() {
-	this->waitForPlayer = this->settings >> 28 & 0b11;				//Bit 19-20
-	speed = (float)(this->settings >> 16 & 0xF);					//Bit 29-32
-	currentNodeNum = this->settings >> 8 & 0xFF;					//Bit 33-40
-	pathID = this->settings >> 0 & 0xFF;							//Bit 41-48
+	this->ignoreLastNodesCount = 0;
+	this->waitForPlayer = this->settings >> 28 & 0b11;				// Bit 19-20
+	pathSpeed = (float)(this->settings >> 16 & 0xF);				// Bit 29-32
+	currentNodeNum = this->settings >> 8 & 0xFF;					// Bit 33-40
+	pathID = this->settings >> 0 & 0xFF;							// Bit 41-48
 	this->loop = false;
 
-	speed /= 6;
+	pathSpeed /= 6;
 
-	if (speed == 0) {
+	if (pathSpeed == 0) {
 		speedFromPath = true;
 	}
 
@@ -87,13 +88,13 @@ void dEnBlockPath_c::beginState_Init() {
 	rail = GetRail(pathID);
 
 	if (rail) {
-		this->loop = rail->flags & 2; //this->settings >> 30 & 1;					   //Bit 18
+		this->loop = rail->flags & 2; //this->settings >> 30 & 1;					   // Bit 18
 		course = dCourseFull_c::instance->get(GetAreaNum());
 		currentNode = &course->railNode[rail->startNode + currentNodeNum];
 		nextNode = &course->railNode[rail->startNode + 1 + currentNodeNum];
 
 		if(speedFromPath) {
-			this->speed = currentNode->speed;
+			this->pathSpeed = currentNode->speed;
 		}
 
 		if ((rail->nodeCount - ignoreLastNodesCount) < currentNodeNum + 1) {
@@ -119,16 +120,16 @@ void dEnBlockPath_c::beginState_Init() {
 		ux = (dx / sqrtf((dx * dx) + (dy * dy)));
 		uy = (dy / sqrtf((dx * dx) + (dy * dy)));
 
-		stepVector.x = ux * speed;
-		stepVector.y = uy * speed;
+		stepVector.x = ux * pathSpeed;
+		stepVector.y = uy * pathSpeed;
 		if(abs(this->stepVector.x) <= 0.1f) {
 			rotate0XNext = true;
 		} else {
 			rotateNext = true;
 		}
-		rest = 1 - getDecimals(distance / speed);
+		rest = 1 - getDecimals(distance / pathSpeed);
 
-		stepCount = floor(distance / speed);
+		stepCount = floor(distance / pathSpeed);
 
 		stepsDone = 0;
 	} else {
@@ -167,7 +168,7 @@ void dEnBlockPath_c::executeState_FollowPath() {
 			nextNode = &course->railNode[rail->startNode + 1 + currentNodeNum];
 
 			if(speedFromPath) {
-				this->speed = currentNode->speed;
+				this->pathSpeed = currentNode->speed;
 			}
 
 			if ((rail->nodeCount - ignoreLastNodesCount) == currentNodeNum + 1) {
@@ -183,8 +184,8 @@ void dEnBlockPath_c::executeState_FollowPath() {
 					ux = (dx / sqrtf((dx * dx) + (dy * dy)));
 					uy = (dy / sqrtf((dx * dx) + (dy * dy)));
 
-					stepVector.x = ux * speed;
-					stepVector.y = uy * speed;
+					stepVector.x = ux * pathSpeed;
+					stepVector.y = uy * pathSpeed;
 					if(abs(this->stepVector.x) <= 0.1f) {
 						rotate0XNext = true;
 					} else {
@@ -197,11 +198,11 @@ void dEnBlockPath_c::executeState_FollowPath() {
 					this->pos.x += stepVector.x * rest;
 					this->pos.y += stepVector.y * rest;
 
-					distance = (sqrtf(pow(dx, 2) + pow(dy, 2))) - (rest * speed);
+					distance = (sqrtf(pow(dx, 2) + pow(dy, 2))) - (rest * pathSpeed);
 
-					stepCount = floor(distance / speed);
+					stepCount = floor(distance / pathSpeed);
 
-					rest = 1 - getDecimals(distance / speed);
+					rest = 1 - getDecimals(distance / pathSpeed);
 
 					stepsDone = 0;
 				}
@@ -215,8 +216,8 @@ void dEnBlockPath_c::executeState_FollowPath() {
 				ux = (dx / sqrtf((dx * dx) + (dy * dy)));
 				uy = (dy / sqrtf((dx * dx) + (dy * dy)));
 
-				stepVector.x = ux * speed;
-				stepVector.y = uy * speed;
+				stepVector.x = ux * pathSpeed;
+				stepVector.y = uy * pathSpeed;
 				if(abs(this->stepVector.x) <= 0.1f) {
 					rotate0XNext = true;
 				} else {
@@ -229,11 +230,11 @@ void dEnBlockPath_c::executeState_FollowPath() {
 				this->pos.x += stepVector.x * rest;
 				this->pos.y += stepVector.y * rest;
 
-				distance = (sqrtf(pow(dx, 2) + pow(dy, 2))) - (rest * speed);
+				distance = (sqrtf(pow(dx, 2) + pow(dy, 2))) - (rest * pathSpeed);
 
-				stepCount = floor(distance / speed);
+				stepCount = floor(distance / pathSpeed);
 
-				rest = 1 - getDecimals(distance / speed);
+				rest = 1 - getDecimals(distance / pathSpeed);
 
 				stepsDone = 0;
 			}
@@ -301,7 +302,7 @@ public:
 	dCourse_c::railNode_s* nextNode;
 	int currentNodeNum, ignoreLastNodesCount;
 	int steps;
-	float speed;
+	float pathSpeed;
 	bool speedFromPath;
 
 	bool loop;
@@ -351,15 +352,16 @@ void dEnPath_c::executeState_Wait() { }
 void dEnPath_c::endState_Wait() { }
 
 void dEnPath_c::beginState_Init() {
-	this->waitForPlayer = this->settings >> 28 & 0b11;				//Bit 19-20
-	speed = (float)(this->settings >> 16 & 0xF);					//Bit 29-32
-	currentNodeNum = this->settings >> 8 & 0xFF;					//Bit 33-40
-	pathID = this->settings >> 0 & 0xFF;							//Bit 41-48
+	this->ignoreLastNodesCount = 0;
+	this->waitForPlayer = this->settings >> 28 & 0b11;				// Bit 19-20
+	pathSpeed = (float)(this->settings >> 16 & 0xF);				// Bit 29-32
+	currentNodeNum = this->settings >> 8 & 0xFF;					// Bit 33-40
+	pathID = this->settings >> 0 & 0xFF;							// Bit 41-48
 	this->loop = false;
 
-	speed /= 6;
+	pathSpeed /= 6;
 
-	if (speed == 0) {
+	if (pathSpeed == 0) {
 		speedFromPath = true;
 	}
 
@@ -371,13 +373,13 @@ void dEnPath_c::beginState_Init() {
 	rail = GetRail(pathID);
 
 	if (rail) {
-		this->loop = rail->flags & 2; //this->settings >> 30 & 1;					   //Bit 18
+		this->loop = rail->flags & 2; //this->settings >> 30 & 1;					   // Bit 18
 		course = dCourseFull_c::instance->get(GetAreaNum());
 		currentNode = &course->railNode[rail->startNode + currentNodeNum];
 		nextNode = &course->railNode[rail->startNode + 1 + currentNodeNum];
 
 		if(speedFromPath) {
-			this->speed = currentNode->speed;
+			this->pathSpeed = currentNode->speed;
 		}
 
 		if ((rail->nodeCount - ignoreLastNodesCount) < currentNodeNum + 1) {
@@ -403,16 +405,16 @@ void dEnPath_c::beginState_Init() {
 		ux = (dx / sqrtf((dx * dx) + (dy * dy)));
 		uy = (dy / sqrtf((dx * dx) + (dy * dy)));
 
-		stepVector.x = ux * speed;
-		stepVector.y = uy * speed;
+		stepVector.x = ux * pathSpeed;
+		stepVector.y = uy * pathSpeed;
 		if(abs(this->stepVector.x) <= 0.1f) {
 			rotate0XNext = true;
 		} else {
 			rotateNext = true;
 		}
-		rest = 1 - getDecimals(distance / speed);
+		rest = 1 - getDecimals(distance / pathSpeed);
 
-		stepCount = floor(distance / speed);
+		stepCount = floor(distance / pathSpeed);
 
 		stepsDone = 0;
 	} else {
@@ -451,7 +453,7 @@ void dEnPath_c::executeState_FollowPath() {
 			nextNode = &course->railNode[rail->startNode + 1 + currentNodeNum];
 
 			if(speedFromPath) {
-				this->speed = currentNode->speed;
+				this->pathSpeed = currentNode->speed;
 			}
 
 			if ((rail->nodeCount - ignoreLastNodesCount) == currentNodeNum + 1) {
@@ -467,8 +469,8 @@ void dEnPath_c::executeState_FollowPath() {
 					ux = (dx / sqrtf((dx * dx) + (dy * dy)));
 					uy = (dy / sqrtf((dx * dx) + (dy * dy)));
 
-					stepVector.x = ux * speed;
-					stepVector.y = uy * speed;
+					stepVector.x = ux * pathSpeed;
+					stepVector.y = uy * pathSpeed;
 					if(abs(this->stepVector.x) <= 0.1f) {
 						rotate0XNext = true;
 					} else {
@@ -481,11 +483,11 @@ void dEnPath_c::executeState_FollowPath() {
 					this->pos.x += stepVector.x * rest;
 					this->pos.y += stepVector.y * rest;
 
-					distance = (sqrtf(pow(dx, 2) + pow(dy, 2))) - (rest * speed);
+					distance = (sqrtf(pow(dx, 2) + pow(dy, 2))) - (rest * pathSpeed);
 
-					stepCount = floor(distance / speed);
+					stepCount = floor(distance / pathSpeed);
 
-					rest = 1 - getDecimals(distance / speed);
+					rest = 1 - getDecimals(distance / pathSpeed);
 
 					stepsDone = 0;
 				}
@@ -499,8 +501,8 @@ void dEnPath_c::executeState_FollowPath() {
 				ux = (dx / sqrtf((dx * dx) + (dy * dy)));
 				uy = (dy / sqrtf((dx * dx) + (dy * dy)));
 
-				stepVector.x = ux * speed;
-				stepVector.y = uy * speed;
+				stepVector.x = ux * pathSpeed;
+				stepVector.y = uy * pathSpeed;
 				if(abs(this->stepVector.x) <= 0.1f) {
 					rotate0XNext = true;
 				} else {
@@ -513,11 +515,11 @@ void dEnPath_c::executeState_FollowPath() {
 				this->pos.x += stepVector.x * rest;
 				this->pos.y += stepVector.y * rest;
 
-				distance = (sqrtf(pow(dx, 2) + pow(dy, 2))) - (rest * speed);
+				distance = (sqrtf(pow(dx, 2) + pow(dy, 2))) - (rest * pathSpeed);
 
-				stepCount = floor(distance / speed);
+				stepCount = floor(distance / pathSpeed);
 
-				rest = 1 - getDecimals(distance / speed);
+				rest = 1 - getDecimals(distance / pathSpeed);
 
 				stepsDone = 0;
 			}
@@ -585,7 +587,7 @@ public:
 	dCourse_c::railNode_s* nextNode;
 	int currentNodeNum, ignoreLastNodesCount;
 	int steps;
-	float speed;
+	float pathSpeed;
 	bool speedFromPath;
 
 	bool loop;
@@ -630,13 +632,14 @@ void dPath_c::executeState_Wait() { }
 void dPath_c::endState_Wait() { }
 
 void dPath_c::beginState_Init() {
-	this->waitForPlayer = this->settings >> 28 & 0b11;					//Bit 19-20
-	speed = this->settings >> 16 & 0xF;									//Bit 29-32
-	currentNodeNum = this->settings >> 8 & 0xFF;						//Bit 33-40
-	pathID = this->settings >> 0 & 0xFF;								//Bit 41-48
+	this->ignoreLastNodesCount = 0;
+	this->waitForPlayer = this->settings >> 28 & 0b11;				// Bit 19-20
+	pathSpeed = this->settings >> 16 & 0xF;								// Bit 29-32
+	currentNodeNum = this->settings >> 8 & 0xFF;					// Bit 33-40
+	pathID = this->settings >> 0 & 0xFF;							// Bit 41-48
 	this->loop = false;
 
-	if (speed == 0) {
+	if (pathSpeed == 0) {
 		speedFromPath = true;
 	}
 
@@ -648,13 +651,13 @@ void dPath_c::beginState_Init() {
 	rail = GetRail(pathID);
 
 	if (rail) {
-		this->loop = rail->flags & 2; //this->settings >> 30 & 1;					   //Bit 18
+		this->loop = rail->flags & 2; //this->settings >> 30 & 1;					   // Bit 18
 		course = dCourseFull_c::instance->get(GetAreaNum());
 		currentNode = &course->railNode[rail->startNode + currentNodeNum];
 		nextNode = &course->railNode[rail->startNode + 1 + currentNodeNum];
 
 		if(speedFromPath) {
-			this->speed = currentNode->speed;
+			this->pathSpeed = currentNode->speed;
 		}
 
 		if ((rail->nodeCount - ignoreLastNodesCount) < currentNodeNum + 1) {
@@ -680,12 +683,12 @@ void dPath_c::beginState_Init() {
 		ux = (dx / sqrtf((dx * dx) + (dy * dy)));
 		uy = (dy / sqrtf((dx * dx) + (dy * dy)));
 
-		stepVector.x = ux * speed;
-		stepVector.y = uy * speed;
+		stepVector.x = ux * pathSpeed;
+		stepVector.y = uy * pathSpeed;
 
-		rest = 1 - getDecimals(distance / speed);
+		rest = 1 - getDecimals(distance / pathSpeed);
 
-		stepCount = floor(distance / speed);
+		stepCount = floor(distance / pathSpeed);
 
 		stepsDone = 0;
 	} else {
@@ -722,7 +725,7 @@ void dPath_c::executeState_FollowPath() {
 			nextNode = &course->railNode[rail->startNode + 1 + currentNodeNum];
 
 			if(speedFromPath) {
-				this->speed = currentNode->speed;
+				this->pathSpeed = currentNode->speed;
 			}
 
 			if ((rail->nodeCount - ignoreLastNodesCount) == currentNodeNum + 1) {
@@ -738,8 +741,8 @@ void dPath_c::executeState_FollowPath() {
 					ux = (dx / sqrtf((dx * dx) + (dy * dy)));
 					uy = (dy / sqrtf((dx * dx) + (dy * dy)));
 
-					stepVector.x = ux * speed;
-					stepVector.y = uy * speed;
+					stepVector.x = ux * pathSpeed;
+					stepVector.y = uy * pathSpeed;
 
 					this->pos.x = currentNode->xPos + offset.x;
 					this->pos.y = (-currentNode->yPos) + offset.y;
@@ -747,11 +750,11 @@ void dPath_c::executeState_FollowPath() {
 					this->pos.x += stepVector.x * rest;
 					this->pos.y += stepVector.y * rest;
 
-					distance = (sqrtf(pow(dx, 2) + pow(dy, 2))) - (rest * speed);
+					distance = (sqrtf(pow(dx, 2) + pow(dy, 2))) - (rest * pathSpeed);
 
-					stepCount = floor(distance / speed);
+					stepCount = floor(distance / pathSpeed);
 
-					rest = 1 - getDecimals(distance / speed);
+					rest = 1 - getDecimals(distance / pathSpeed);
 
 					stepsDone = 0;
 				}
@@ -765,8 +768,8 @@ void dPath_c::executeState_FollowPath() {
 				ux = (dx / sqrtf((dx * dx) + (dy * dy)));
 				uy = (dy / sqrtf((dx * dx) + (dy * dy)));
 
-				stepVector.x = ux * speed;
-				stepVector.y = uy * speed;
+				stepVector.x = ux * pathSpeed;
+				stepVector.y = uy * pathSpeed;
 
 				this->pos.x = currentNode->xPos + offset.x;
 				this->pos.y = (-currentNode->yPos) + offset.y;
@@ -774,11 +777,11 @@ void dPath_c::executeState_FollowPath() {
 				this->pos.x += stepVector.x * rest;
 				this->pos.y += stepVector.y * rest;
 
-				distance = (sqrtf(pow(dx, 2) + pow(dy, 2))) - (rest * speed);
+				distance = (sqrtf(pow(dx, 2) + pow(dy, 2))) - (rest * pathSpeed);
 
-				stepCount = floor(distance / speed);
+				stepCount = floor(distance / pathSpeed);
 
-				rest = 1 - getDecimals(distance / speed);
+				rest = 1 - getDecimals(distance / pathSpeed);
 
 				stepsDone = 0;
 			}
